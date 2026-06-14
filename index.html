@@ -553,7 +553,7 @@ const SB_URL="https://uvxpdwxcukgulfvghkgd.supabase.co";
 const SB_KEY="sb_publishable_gueZdiYW3XeYWxTLbQYIjQ_O98sWctU";
 let sb=null, liveChan=null, L=null;   // L = live state
 // Live always uses the questions baked into THIS file so every device matches.
-function liveSet(){ return DEFAULT_GAME.questions.filter(q=>q&&q.img&&(q.opts||[]).filter(o=>o&&o.trim()).length>=2); }
+function liveSet(){ return ((L&&L.net==='p2p'&&L.role==='host')?GAME:DEFAULT_GAME).questions.filter(q=>q&&q.img&&(q.opts||[]).filter(o=>o&&o.trim()).length>=2); }
 async function getSB(){ if(sb) return sb; const m=await import('https://esm.sh/@supabase/supabase-js@2');
   sb=m.createClient(SB_URL,SB_KEY,{realtime:{params:{eventsPerSecond:15}}}); return sb; }
 async function makeQR(text,el){ try{ const Q=(await import('https://esm.sh/qrcode@1')).default;
@@ -650,7 +650,7 @@ function subscribeQuizHost(s,code){
 function hostPlayers(){ return activeFilter(Object.values(L.players)); }
 async function hostStart(){ if(L&&L.net==='p2p') return hostStartP2P(); const s=await getSB(); L.status='playing'; L.current_q=0;
   await s.from('rooms').update({status:'playing',current_q:0}).eq('code',L.code); renderHost(); }
-async function hostNext(){ if(L&&L.autoTimer){ clearTimeout(L.autoTimer); L.autoTimer=null; } const s=await getSB(); const N=liveSet().length;
+async function hostNext(){ if(L&&L.net==='p2p') return pgHostNext(); if(L&&L.autoTimer){ clearTimeout(L.autoTimer); L.autoTimer=null; } const s=await getSB(); const N=liveSet().length;
   if(L.current_q<N-1){ L.current_q++; await s.from('rooms').update({current_q:L.current_q}).eq('code',L.code); }
   else { L.status='ended'; L.rIdx=0; await s.from('rooms').update({status:'ended'}).eq('code',L.code); }
   renderHost(); }
@@ -1344,16 +1344,22 @@ function pgHostMsg(gid,o){
   } else if(o.t==='answer'){
     const p=L.players[gid]; if(!p)return;
     if(p.picks[o.qi]==null){ p.picks[o.qi]=o.opt; p.last_q=Math.max(p.last_q|0,o.qi|0); }
-    renderHost();
+    renderHost(); pgMaybeAutoAdvance();
   }
 }
 function pgRoom(){ const set=pgSet(); const Q=(L.status==='playing'&&L.current_q>=0)?set[L.current_q]:null;
   return {t:'room',status:L.status,current_q:L.current_q,total:set.length,q:Q?{text:Q.q,opts:(Q.opts||[]).filter(o=>o&&o.trim())}:null}; }
-function hostStartP2P(){ /* Stage 2b-2 will run the full quiz; this confirms the bidirectional loop end-to-end */
-  L.status='ready'; pgBroadcast(pgRoom()); pgBroadcast({t:'go'});
-  const n=Object.keys(L.players).length;
-  app.innerHTML=topbar('leaveHost()')+`<div class="waitcard"><div class="big">🎮</div><div class="rank" style="font-size:22px">${n} player${n===1?'':'s'} connected &amp; ready</div><div class="sub" style="color:var(--muted);margin:8px 0 6px">Local P2P lobby works — no internet was used for the connection, just your wifi. Quiz play over P2P lands in the next update.</div><button class="cta alt" style="margin-top:14px" onclick="leaveHost()">Back</button></div>`;
-}
+function hostStartP2P(){ L.status='playing'; L.current_q=0; pgBroadcast(pgRoom()); renderHost(); }
+function pgHostNext(){ if(L.autoTimer){clearTimeout(L.autoTimer);L.autoTimer=null;} const N=liveSet().length;
+  if(L.current_q<N-1){ L.current_q++; } else { L.status='ended'; L.rIdx=0; }
+  pgBroadcast(pgRoom()); renderHost(); }
+function pgMaybeAutoAdvance(){ if(!L||L.role!=='host'||L.net!=='p2p'||L.status!=='playing')return;
+  const ppl=Object.values(L.players), N=liveSet().length;
+  if(ppl.length<1)return; if(L.current_q>=N-1)return;
+  if(!ppl.every(p=>(p.last_q|0)>=L.current_q))return; if(L.autoTimer)return;
+  const at=L.current_q;
+  L.autoTimer=setTimeout(()=>{ L.autoTimer=null; if(!L||L.status!=='playing'||L.current_q!==at)return;
+    const now=Object.values(L.players); if(now.length>=1&&now.every(p=>(p.last_q|0)>=at)) pgHostNext(); },1600); }
 
 /* ---- P2P guest (phone) ---- */
 async function joinP2P(code){
@@ -1393,8 +1399,44 @@ function pgGuestMsg(o){
 }
 function submitNameP2P(){ const el=document.getElementById('myname'); const name=(el.value||'').trim().slice(0,16); if(!name){ flash("Add a name first",true); return; } L.name=name; pgSend({t:'join',name}); renderPlayerWait(); }
 function pgGuestRender(){
-  if(!L||!L.room||L.room.status==='lobby'){ renderPlayerWait(); return; }
-  app.innerHTML=topbar('leavePlayer()')+`<div class="lockcard"><div class="big">🎮</div><div class="rank">You're in, ${esc(L.name||'')}!</div><div class="sub">Connected to the host over wifi — no internet needed. Quiz play over P2P arrives in the next update. 📺</div><div class="conn" style="margin-top:12px">room ${esc(L.code)}</div></div>`;
+  if(!L||!L.room){ renderPlayerWait(); return; }
+  const st=L.room.status;
+  if(st==='lobby'||st==='ready'){ renderPlayerWait(); return; }
+  if(st==='ended'){ pgPlayerFinal(); return; }
+  const cq=L.room.current_q|0;
+  if(L.picks[cq]!=null){ pgRenderLocked(cq); return; }
+  pgRenderOptions(cq);
+}
+function pgRenderOptions(q){
+  const Q=L.q; if(!Q){ renderPlayerWait(); return; }
+  const opts=Q.opts||[];
+  app.innerHTML=`
+    <div class="turnbanner">📺 <b>${esc(L.name)}</b><span class="pill">${esc(L.code)} · Q ${q+1}/${L.room.total}</span></div>
+    <div class="qcard"><div class="qbody" style="padding-top:20px">
+      <div class="qnum">Question ${q+1} of ${L.room.total} · look at the photo on the TV 📺</div>
+      <div class="qtext" style="font-size:19px;color:var(--ink);margin:6px 0 4px">${esc(Q.text)}</div>
+      <div class="qsub" style="font-size:14px;color:var(--muted);margin:0 0 14px">Pick your answer 👇</div>
+      <div class="opts">${opts.map((o,i)=>`<button class="opt" onclick="pgPick(${q},${i})"><span class="lab">${letters[i]}</span><span>${esc(o)}</span></button>`).join('')}</div>
+    </div></div>
+    <footer class="credit">Your pick is hidden until the big reveal on the TV.</footer>`;
+  window.scrollTo({top:0});
+}
+function pgPick(q,i){ if(!L||L.picks[q]!=null)return; L.picks[q]=i; pgSend({t:'answer',qi:q,opt:i}); pgRenderLocked(q); }
+function pgRenderLocked(q){
+  app.innerHTML=topbar('leavePlayer()')+`
+    <div class="lockcard"><div class="big">✅</div>
+      <div class="rank">Locked in!</div>
+      <div class="sub">Answer ${letters[L.picks[q]]} sent. Eyes on the TV — next question is coming.</div>
+      <div class="conn" style="margin-top:14px">Q ${q+1} of ${L.room.total} · room ${esc(L.code)}</div></div>`;
+}
+function pgPlayerFinal(){
+  let voted=0, tot=L.room.total||0; for(let i=0;i<tot;i++) if(typeof L.picks[i]==='number')voted++;
+  burst(true);
+  app.innerHTML=topbar('leavePlayer()')+`
+    <div class="lockcard"><div class="big">🗳️</div>
+      <div class="rank">Votes in!</div>
+      <div class="sub">Thanks, ${esc(L.name)} — you voted on ${voted} of ${tot}. The room's verdict is rolling out on the TV. 📺</div>
+      <button class="cta alt" style="margin-top:16px" onclick="leavePlayer()">Done</button></div>`;
 }
 function pgGuestLost(){ if(!L)return; app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="rank" style="font-size:22px">Lost connection to host</div><div class="sub" style="color:var(--muted);margin:10px 0 18px">The host may have closed the room or left wifi range.</div><button class="cta" onclick="home()">Home</button></div>`; }
 
