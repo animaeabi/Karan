@@ -548,7 +548,7 @@ async function makeQR(text,el){ try{ const Q=(await import('https://esm.sh/qrcod
 function roomCode(){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<4;i++)s+=a[Math.floor(Math.random()*a.length)]; return s; }
 function clientId(){ let c; try{c=sessionStorage.getItem('kp_cid');}catch(e){} if(!c){c=Math.random().toString(36).slice(2);try{sessionStorage.setItem('kp_cid',c);}catch(e){}} return c; }
 function joinLink(code){ return location.origin+location.pathname+'#join='+code; }
-function cleanupLive(){ try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){} L=null; }
+function cleanupLive(){ try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){} if(L&&L.autoTimer){clearTimeout(L.autoTimer);L.autoTimer=null;} L=null; }
 function scoreOf(p){ const set=liveSet(); let s=0; const pk=p.picks||[]; for(let i=0;i<set.length;i++) if(pk[i]===set[i].correct) s++; return s; }
 
 /* ---- HOST (TV) ---- */
@@ -566,17 +566,34 @@ async function hostLive(){
   (data||[]).forEach(p=>L.players[p.id]=p);
   liveChan=s.channel('room-'+code)
     .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_code=eq.'+code},
-      p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else L.players[r.id]=r; renderHost(); })
+      p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else L.players[r.id]=r; renderHost(); maybeAutoAdvance(); })
     .subscribe();
   renderHost();
 }
 function hostPlayers(){ return Object.values(L.players); }
 async function hostStart(){ const s=await getSB(); L.status='playing'; L.current_q=0;
   await s.from('rooms').update({status:'playing',current_q:0}).eq('code',L.code); renderHost(); }
-async function hostNext(){ const s=await getSB(); const N=liveSet().length;
+async function hostNext(){ if(L&&L.autoTimer){ clearTimeout(L.autoTimer); L.autoTimer=null; } const s=await getSB(); const N=liveSet().length;
   if(L.current_q<N-1){ L.current_q++; await s.from('rooms').update({current_q:L.current_q}).eq('code',L.code); }
   else { L.status='ended'; L.rIdx=0; await s.from('rooms').update({status:'ended'}).eq('code',L.code); }
   renderHost(); }
+// Auto-advance: once every joined player has answered the current photo, move the
+// TV to the next one after a short beat. Host can still tap Next at any time.
+function maybeAutoAdvance(){
+  if(!L||L.role!=='host'||L.status!=='playing') return;
+  const ppl=hostPlayers(), N=liveSet().length;
+  if(ppl.length<1) return;                                 // wait for players
+  if(L.current_q>=N-1) return;                             // last photo: host starts the reveal
+  if(!ppl.every(p=>(p.last_q|0)>=L.current_q)) return;     // someone is still voting
+  if(L.autoTimer) return;                                  // already counting down
+  const qAt=L.current_q;
+  L.autoTimer=setTimeout(()=>{
+    L.autoTimer=null;
+    if(!L||L.role!=='host'||L.status!=='playing'||L.current_q!==qAt) return;
+    const now=hostPlayers();
+    if(now.length>=1 && now.every(p=>(p.last_q|0)>=qAt)) hostNext();
+  },1600);
+}
 function renderHost(){
   if(!L||L.role!=='host') return;
   const ppl=hostPlayers(), set=liveSet(), N=set.length;
@@ -611,6 +628,7 @@ function renderHost(){
         </div>
       </div>
       <div class="statusline" style="text-align:center"><b style="color:var(--mango)">${answered}</b> of ${ppl.length} answered</div>
+      ${(ppl.length>0 && answered>=ppl.length && L.current_q<N-1)?'<div class="conn" style="text-align:center;color:var(--mint)">✅ Everyone\'s in — next photo coming up…</div>':''}
       <div class="plist">${ppl.map(p=>`<span class="ptag ${(p.last_q|0)>=L.current_q?'done':''}">${esc(p.name)}${(p.last_q|0)>=L.current_q?' ✓':''}</span>`).join('')}</div>
       <button class="cta" onclick="hostNext()">${L.current_q<N-1?'Next question →':'See what the room thinks 🏁'}</button>
       <div class="conn">Votes stay hidden until everyone's done.</div>`;
