@@ -597,7 +597,7 @@ function renderHost(){
     return;
   }
   if(L.status==='playing'){
-    const Q=set[L.current_q], opts=(Q.opts||[]).filter(o=>o&&o.trim());
+    const Q=set[L.current_q];
     const answered=ppl.filter(p=>(p.last_q|0)>=L.current_q).length;
     const dots=set.map((_,i)=>`<span class="pd ${i<L.current_q?'done':''} ${i===L.current_q?'cur':''}"></span>`).join('');
     app.innerHTML=topbar('leaveHost()')+`
@@ -607,7 +607,7 @@ function renderHost(){
         <div class="qbody">
           <div class="qnum">Question ${L.current_q+1} of ${N}</div>
           <div class="qtext">${esc(Q.q)}</div>
-          <div class="opts">${opts.map((o,i)=>`<div class="opt read"><span class="lab">${letters[i]}</span><span>${esc(o)}</span></div>`).join('')}</div>
+          <div class="conn" style="margin-top:10px">📱 Everyone: tap your answer on your phone. Options stay off the TV.</div>
         </div>
       </div>
       <div class="statusline" style="text-align:center"><b style="color:var(--mango)">${answered}</b> of ${ppl.length} answered</div>
@@ -735,8 +735,9 @@ function renderPlayerOptions(q){
   app.innerHTML=`
     <div class="turnbanner">📺 <b>${esc(L.name)}</b><span class="pill">${esc(L.code)} · Q ${q+1}/${set.length}</span></div>
     <div class="qcard"><div class="qbody" style="padding-top:20px">
-      <div class="qnum">Question ${q+1} — look at the TV 📺</div>
-      <div class="qtext" style="font-size:18px;color:var(--muted);margin:6px 0 14px">Pick your answer:</div>
+      <div class="qnum">Question ${q+1} of ${set.length} · look at the photo on the TV 📺</div>
+      <div class="qtext" style="font-size:19px;color:var(--ink);margin:6px 0 4px">${esc(Q.q)}</div>
+      <div class="qsub" style="font-size:14px;color:var(--muted);margin:0 0 14px">Pick your answer 👇</div>
       <div class="opts">${opts.map((o,i)=>`<button class="opt" onclick="livePick(${q},${i})"><span class="lab">${letters[i]}</span><span>${esc(o)}</span></button>`).join('')}</div>
     </div></div>
     <footer class="credit">Your pick is hidden until the big reveal on the TV.</footer>`;
