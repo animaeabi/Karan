@@ -317,8 +317,6 @@ function home(){
         <span><span class="mt">Party Mode</span><span class="ms">Host on the TV · everyone joins by QR</span></span></button>
       <button class="mode m2" onclick="roastLive()"><span class="ico">😈</span>
         <span><span class="mt">Roast Battle</span><span class="ms">Host on TV · everyone writes roasts · vote the best</span></span></button>
-      <button class="mode m3" onclick="roastCards()"><span class="ico">🔥</span>
-        <span><span class="mt">Roast Cards</span><span class="ms">Tap, flip, laugh — no scoring</span></span></button>
     </div>
     <button class="editbtn" onclick="editor()">✏️ Edit photos, questions &amp; title</button>
     <div class="home-foot"><button class="linklike" onclick="joinPrompt()">On your phone? Join a live game →</button></div>
@@ -330,27 +328,6 @@ function topbar(back){
     <button class="ghostbtn" onclick="${back||'home()'}">↩ ${back?'Back':'Home'}</button></div>`;
 }
 
-/* =================== ROAST CARDS =================== */
-function roastCards(){
-  const set=(GAME.roast||[]).filter(r=>r&&r.img);
-  if(!set.length){
-    app.innerHTML = topbar()+`<section class="setup"><h2>Roast Cards 🔥</h2>
-      <p class="h">No roast cards yet. Add some photos and punchlines in the editor.</p>
-      <button class="cta" onclick="editor('roast')">Add roast cards ✏️</button></section>`;
-    return;
-  }
-  app.innerHTML = topbar()+`
-    <section class="setup"><h2>Roast Cards 🔥</h2>
-      <p class="h">Tap any photo to flip it and reveal the verdict. Pure slander, no scoring.</p></section>
-    <div class="cards">
-      ${set.map(r=>`<div class="flip" onclick="this.classList.toggle('on')"><div class="inner">
-        <div class="face front"><img src="${r.img}" alt="Karan"/>
-          <div class="taghint">${esc(r.label||'Tap to reveal')} <span style="color:var(--mango)">· tap</span></div></div>
-        <div class="face back"><h4>The verdict</h4><div class="ans">${esc(r.verdict||'')}</div>
-          ${r.roast?`<div class="roast">${esc(r.roast)}</div>`:''}</div></div></div>`).join('')}
-    </div>
-    <div class="btnrow" style="margin-top:16px"><button class="cta alt" onclick="home()">Home</button></div>`;
-}
 
 /* =================== EDITOR =================== */
 function editor(tab){
@@ -365,11 +342,10 @@ function editor(tab){
       <button class="cta alt" style="margin-bottom:18px" onclick="saveTitle()">Save title</button>
 
       <div class="tabbar">
-        <button class="tab ${edTab==='quiz'?'on':''}" onclick="editor('quiz')">Quiz questions (${GAME.questions.length})</button>
-        <button class="tab ${edTab==='roast'?'on':''}" onclick="editor('roast')">Roast cards (${(GAME.roast||[]).length})</button>
+        <button class="tab on">Quiz questions (${GAME.questions.length})</button>
       </div>
       <div id="list" class="qlist"></div>
-      <button class="addq" onclick="${edTab==='quiz'?'addQuestion()':'addRoast()'}">➕ Add ${edTab==='quiz'?'a question':'a roast card'}</button>
+      <button class="addq" onclick="addQuestion()">➕ Add a question</button>
 
       <div class="edsec"><h3>Share your version</h3>
         <p class="h" style="margin-bottom:12px">Photos are too big for a link, so download a fresh game file with everything baked in and re-upload it to your host. Everyone who opens it gets your new version.</p>
