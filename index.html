@@ -360,23 +360,23 @@ function editor(tab){
   renderList();
 }
 function saveTitle(){ GAME.tagline=(document.getElementById('g_tag').value||'').trim(); GAME.sub=(document.getElementById('g_sub').value||'').trim(); saveLocal(); flash("Title saved ✓"); }
-function curList(){ return edTab==='quiz'?GAME.questions:(GAME.roast=GAME.roast||[]); }
+function curList(){ return GAME.questions; }
 function renderList(){
   const wrap=document.getElementById('list'); if(!wrap) return;
   const L=curList();
   if(!L.length){ wrap.innerHTML=`<div class="qrow"><div class="meta"><div class="t" style="color:var(--muted)">Nothing here yet. Tap “Add” below.</div></div></div>`; return; }
   wrap.innerHTML=L.map((q,i)=>{
-    const title = edTab==='quiz' ? (q.q||'Untitled question') : (q.verdict||q.label||'Untitled card');
+    const title = q.q||'Untitled question';
     return `<div class="qrow">
       ${q.img?`<img class="thumb" src="${q.img}" alt="">`:`<div class="thumb empty">🖼️</div>`}
-      <div class="meta"><div class="n">${edTab==='quiz'?'Q':'R'}${i+1}</div><div class="t">${esc(title)}</div></div>
+      <div class="meta"><div class="n">Q${i+1}</div><div class="t">${esc(title)}</div></div>
       <div class="acts">
         <div class="minirow">
           <button class="mini" onclick="moveItem(${i},-1)" ${i===0?'disabled style=opacity:.3':''}>▲</button>
           <button class="mini" onclick="moveItem(${i},1)" ${i===L.length-1?'disabled style=opacity:.3':''}>▼</button>
         </div>
         <div class="minirow">
-          <button class="mini" onclick="${edTab==='quiz'?`editQuestion(${i})`:`editRoast(${i})`}">✏️</button>
+          <button class="mini" onclick="editQuestion(${i})">✏️</button>
           <button class="mini del" onclick="delItem(${i})">🗑</button>
         </div>
       </div></div>`;}).join('');
@@ -433,54 +433,14 @@ function saveQuestion(){
   saveLocal(); flash("Saved ✓"); editor('quiz');
 }
 
-/* ---- roast card form ---- */
-function addRoast(){ draft={img:'',label:'',verdict:'',roast:''}; draftIdx=-1; renderREdit(); }
-function editRoast(i){ const R=GAME.roast[i]; draft={img:R.img||'',label:R.label||'',verdict:R.verdict||'',roast:R.roast||''}; draftIdx=i; renderREdit(); }
-function renderREdit(){
-  app.innerHTML = topbar('editor()')+`
-    <section class="ed"><h2>${draftIdx<0?'New roast card':'Edit roast card'}</h2>
-      <div class="field"><label>Photo</label>
-        <div class="photobox">${draft.img?`<img src="${draft.img}" alt="">`:`<div class="ph">No photo yet.</div>`}</div>
-        <div class="photobtns"><button onclick="pickPhoto()">${draft.img?'Replace photo':'Add photo'}</button>
-          ${draft.img?`<button class="rm" onclick="removePhoto2()">Remove</button>`:''}</div></div>
-      <div class="field"><label>Front caption <span style="text-transform:none;color:var(--muted);font-weight:500">(optional)</span></label>
-        <input type="text" id="r_label" value="${esc(draft.label)}" placeholder="Shown on the photo before flipping"></div>
-      <div class="field"><label>The verdict (big reveal)</label>
-        <input type="text" id="r_verdict" value="${esc(draft.verdict)}" placeholder="e.g. Mumbai hibernation champion"></div>
-      <div class="field"><label>Roast line <span style="text-transform:none;color:var(--muted);font-weight:500">(optional)</span></label>
-        <input type="text" id="r_roast" value="${esc(draft.roast)}" placeholder="The slander underneath"></div>
-      <div class="btnrow">
-        <button class="cta" onclick="saveRoast()">Save card</button>
-        ${draftIdx>=0?`<button class="cta alt" onclick="if(confirm('Delete?')){GAME.roast.splice(${draftIdx},1);saveLocal();editor('roast');}">Delete</button>`:''}
-        <button class="cta alt" onclick="editor('roast')">Cancel</button>
-      </div></section>`;
-  window.scrollTo({top:0});
-}
-function captureR(){
-  const g=id=>{const e=document.getElementById(id);return e?e.value:'';};
-  draft.label=g('r_label'); draft.verdict=g('r_verdict'); draft.roast=g('r_roast');
-}
-function removePhoto2(){ captureR(); draft.img=''; renderREdit(); }
-function saveRoast(){
-  captureR();
-  if(!draft.img){ flash("Add a photo first",true); return; }
-  if(!draft.verdict.trim()){ flash("Add a verdict",true); return; }
-  const obj={img:draft.img,label:(draft.label||'').trim(),verdict:draft.verdict.trim(),roast:(draft.roast||'').trim()};
-  GAME.roast=GAME.roast||[];
-  if(draftIdx>=0) GAME.roast[draftIdx]=obj; else GAME.roast.push(obj);
-  saveLocal(); flash("Saved ✓"); editor('roast');
-}
-
 /* ---- photo input shared ---- */
 function pickPhoto(){ fileTarget='draft'; document.getElementById('filein').click(); }
 function removePhoto(){ captureQ(); draft.img=''; renderQEdit(); }
 document.getElementById('filein').addEventListener('change', async e=>{
   const f=e.target.files[0]; e.target.value=''; if(!f) return;
   if(fileTarget==='import'){ importJSONFile(f); fileTarget=null; return; }
-  try{ const url=await fileToDataURL(f);
-    if(document.getElementById('f_q')){ captureQ(); draft.img=url; renderQEdit(); }
-    else { captureR(); draft.img=url; renderREdit(); }
-  }catch(err){ flash("Couldn't read that image (HEIC? try a JPG)",true); }
+  try{ const url=await fileToDataURL(f); captureQ(); draft.img=url; renderQEdit(); }
+  catch(err){ flash("Couldn't read that image (HEIC? try a JPG)",true); }
   fileTarget=null;
 });
 function fileToDataURL(file,maxDim=1000,q=0.74){
