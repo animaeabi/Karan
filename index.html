@@ -506,9 +506,7 @@ async function playerResync(){
   let s; try{ s=await getSB(); }catch(e){ return; }
   let room; try{ ({data:room}=await s.from('rooms').select('*').eq('code',L.code).maybeSingle()); }catch(e){ return; }
   if(!room) return;
-  const sig=[room.status,room.current_q,room.phase,room.cur_photo].join('|');
-  L.room=room;
-  if(sig!==L._sig){ L._sig=sig; onRoomUpdate(); }
+  L.room=room; reconcilePlayer();
 }
 function startHostPoll(){ if(!L)return; if(L.hostPoll)clearInterval(L.hostPoll); L.hostPoll=setInterval(hostResync,3500); }
 async function hostResync(){
@@ -724,12 +722,23 @@ async function submitName(){
   L.pid=pid; L.name=name;
   subscribeAsPlayer(s); saveSession(); onRoomUpdate(true);
 }
-function onRoomUpdate(first){
-  if(L.mode==='roast') return roastPlayerUpdate(first);
-  const st=L.room.status, cq=L.room.current_q;
-  if(st==='ended'){ playerFinal(); return; }
-  if(st==='playing'){ if(cq!==L.curQ || first){ L.curQ=cq; renderPlayerOptions(cq); } return; }
-  renderPlayerWait();
+function onRoomUpdate(){ reconcilePlayer(); }
+// The phone's screen is a pure function of (room state + what I've locally
+// submitted). Recomputed on every realtime event, poll tick, focus and submit,
+// so a missed update self-heals within one poll and never clobbers live input.
+function reconcilePlayer(){
+  if(!L||L.role!=='player'||!L.room) return;
+  if(L.mode==='roast') return reconcileRoast();
+  return reconcileQuiz();
+}
+function reconcileQuiz(){
+  const st=L.room.status, cq=L.room.current_q|0;
+  const key = st==='ended'?'final' : st==='playing'?((L.picks[cq]!=null?'locked-':'q-')+cq) : 'wait';
+  if(key===L.view) return; L.view=key;
+  if(key==='final'){ playerFinal(); return; }
+  if(key==='wait'){ renderPlayerWait(); return; }
+  if(key.charAt(0)==='l'){ renderLocked(cq); return; }
+  renderPlayerOptions(cq);
 }
 function renderPlayerWait(){
   app.innerHTML=topbar('leavePlayer()')+`
@@ -758,7 +767,7 @@ async function livePick(q,i){
   L.picks[q]=i;
   const s=await getSB();
   s.from('players').update({picks:L.picks,last_q:q}).eq('id',L.pid).then(()=>{});
-  renderLocked(q);
+  reconcilePlayer();
 }
 function renderLocked(q){
   const set=liveSet();
@@ -952,15 +961,24 @@ function renderRoastSummary(){
 }
 
 /* ---- PLAYER (phone) ---- */
-function roastPlayerUpdate(first){
-  const ph=L.room.phase||'lobby', cur=L.room.cur_photo;
-  const changed = first || ph!==L.ph || cur!==L.pcur;
-  L.ph=ph; L.pcur=cur;
-  if(ph==='writing'){ if(changed){ roastRenderWrite(cur); startTick(); } return; }
+function reconcileRoast(){
+  const ph=L.room.phase||'lobby', cur=L.room.cur_photo|0;
+  let key;
+  if(ph==='reveal'||ph==='done') key='final';
+  else if(ph==='writing') key=((L.subs&&L.subs[cur])?'wrote-':'write-')+cur;
+  else if(ph==='voting') key=((L.voted&&L.voted[cur])?'voted-':'vote-')+cur;
+  else key='wait';
+  if(key===L.view) return; L.view=key;
+  if(key==='final'){ clearTick(); roastPlayerFinal(); return; }
+  if(key==='wait'){ clearTick(); roastPlayerWait(); return; }
+  if(ph==='writing'){
+    if(L.subs&&L.subs[cur]){ clearTick(); roastWaitMsg('Roast locked in 🔥','Watch the TV — next photo soon.',cur); }
+    else { roastRenderWrite(cur); startTick(); }
+    return;
+  }
   clearTick();
-  if(ph==='voting'){ if(changed) roastRenderVote(cur); return; }
-  if(ph==='reveal'||ph==='done'){ roastPlayerFinal(); return; }
-  roastPlayerWait();
+  if(L.voted&&L.voted[cur]){ roastWaitMsg('Vote locked 🗳️','Watch the TV for the results.',cur); }
+  else { roastRenderVote(cur); }
 }
 function roastPlayerWait(){
   app.innerHTML=topbar('leavePlayer()')+`
@@ -992,7 +1010,7 @@ async function submitRoast(cur){
   const s=await getSB();
   const {error}=await s.from('roasts').insert({room_code:L.code,photo_idx:cur,author_id:L.pid,author_name:L.name,text});
   if(error && !/duplicate/i.test(error.message||'')){ L.subs[cur]=false; flash("Couldn't send, try again",true); return; }
-  roastWaitMsg('Roast locked in 🔥','Watch the TV — next photo soon.',cur);
+  reconcilePlayer();
 }
 async function roastRenderVote(cur){
   const set=roastSet();
@@ -1020,7 +1038,7 @@ async function voteRoast(cur,roastId){
   const s=await getSB();
   const {error}=await s.from('roast_votes').insert({room_code:L.code,photo_idx:cur,roast_id:roastId,voter_id:L.pid});
   if(error && !/duplicate/i.test(error.message||'')){ L.voted[cur]=false; flash("Couldn't vote, try again",true); return; }
-  roastWaitMsg('Vote locked 🗳️','Watch the TV for the results.',cur);
+  reconcilePlayer();
 }
 function roastWaitMsg(title,sub,cur){
   const set=roastSet();
