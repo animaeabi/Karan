@@ -733,14 +733,15 @@ function liveError(msg){
 }
 
 /* =================== ROAST BATTLE (Supabase, host-paced) =================== */
-const ROAST_SECONDS=45;
+const ROAST_SECONDS=120;
+function fmtClock(s){ s=Math.max(0,s|0); const m=Math.floor(s/60), ss=s%60; return m+':'+String(ss).padStart(2,'0'); }
 function roastSet(){ return (DEFAULT_GAME.roastSet||[]).filter(p=>p&&p.img); }
 function clearTick(){ if(L&&L.tick){ clearInterval(L.tick); L.tick=null; } }
 function clearTimers(){ if(!L)return; if(L.advTimer){clearTimeout(L.advTimer);L.advTimer=null;} clearTick(); }
 function startTick(){ clearTick(); if(!L)return;
   L.tick=setInterval(()=>{ const el=document.getElementById('rtimer'); if(!el)return;
     const ends=L.role==='host'?(L.phaseEndsAt||0):(L.room&&L.room.phase_ends_at?Date.parse(L.room.phase_ends_at):0);
-    el.textContent=Math.max(0,Math.ceil((ends-Date.now())/1000)); },250); }
+    el.textContent=fmtClock(Math.ceil((ends-Date.now())/1000)); },250); }
 
 /* ---- HOST (TV) ---- */
 async function roastLive(){
@@ -812,7 +813,7 @@ function renderRoastHost(){
         <div class="statusline">${ppl.length} player${ppl.length===1?'':'s'} joined</div>
         <div class="plist">${ppl.length?ppl.map(p=>`<span class="ptag">${esc(p.name)}</span>`).join(''):'<span class="ptag" style="opacity:.6">waiting for players…</span>'}</div>
         <button class="cta" onclick="roastStart()" ${ppl.length<1?'disabled':''}>${ppl.length<1?'Waiting for players':'Start roasting →'}</button>
-        <div class="conn">${N} photo${N===1?'':'s'} · ${ROAST_SECONDS}s each. Everyone writes a roast on their phone, then you vote. <b>Keep this on the TV.</b></div>
+        <div class="conn">${N} photo${N===1?'':'s'} · ${ROAST_SECONDS%60===0?ROAST_SECONDS/60+' min':ROAST_SECONDS+'s'} each. Everyone writes a roast on their phone, then you vote. <b>Keep this on the TV.</b></div>
       </div>`;
     const q=document.getElementById('qr'); if(q) makeQR(joinLink(L.code),q);
     return;
@@ -826,7 +827,7 @@ function renderRoastHost(){
         <img class="qphoto ${Q.wide?'wide':''}" src="${Q.img}" alt=""/>
         <div class="qbody">
           <div class="qnum">Photo ${L.cur+1} of ${N} · ✍️ write your roast on your phone</div>
-          <div class="qtext" style="font-size:44px;color:var(--mango);line-height:1"><span id="rtimer">${ROAST_SECONDS}</span>s</div>
+          <div class="qtext" style="font-size:44px;color:var(--mango);line-height:1"><span id="rtimer">${fmtClock(ROAST_SECONDS)}</span></div>
           <div class="conn" style="margin-top:6px">Funniest roast wins the vote. No names shown yet.</div>
         </div>
       </div>
@@ -918,7 +919,7 @@ function roastRenderWrite(cur){
   const set=roastSet();
   if(L.subs&&L.subs[cur]){ return roastWaitMsg('Roast locked in 🔥','Watch the TV — next photo soon.',cur); }
   app.innerHTML=`
-    <div class="turnbanner">✍️ <b>${esc(L.name)}</b><span class="pill">${esc(L.code)} · ⏱ <span id="rtimer">${ROAST_SECONDS}</span>s</span></div>
+    <div class="turnbanner">✍️ <b>${esc(L.name)}</b><span class="pill">${esc(L.code)} · ⏱ <span id="rtimer">${fmtClock(ROAST_SECONDS)}</span></span></div>
     <div class="qcard"><div class="qbody" style="padding-top:20px">
       <div class="qnum">Photo ${cur+1} of ${set.length} — look at the TV 📺</div>
       <div class="qtext" style="font-size:18px;margin:6px 0 10px">Roast this photo of Karan 🔥</div>
