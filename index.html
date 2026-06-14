@@ -373,6 +373,7 @@ function home(){
     <button class="editbtn" onclick="editor()">✏️ Edit photos, questions &amp; title</button>
     <button class="editbtn" onclick="newGame()" style="margin-top:8px">✨ Make it about a different friend</button>
     <div class="home-foot"><button class="linklike" onclick="joinPrompt()">On your phone? Join a live game →</button></div>
+    <div class="home-foot"><button class="linklike" onclick="p2pTestHost()" style="opacity:.7">🔌 Test local P2P connection (beta)</button></div>
     <div class="home-foot">${GAME.name?('Made for '+esc(GAME.name)+' • '):''}${new Date().getFullYear()}</div>
     <footer class="credit"><b>Party Mode</b> needs internet for everyone and works best on a TV/laptop the group can see.</footer>`;
 }
@@ -1187,6 +1188,104 @@ function roastPlayerFinal(){
       <button class="cta alt" style="margin-top:16px" onclick="leavePlayer()">Done</button></div>`;
 }
 
+/* =================== P2P TRANSPORT TEST (WebRTC, Supabase broadcast = signaling only) =================== */
+const ICE_CONF={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+let P=null;
+function p2pLog(m){ if(!P)return; P.log=P.log||[]; P.log.unshift('['+new Date().toLocaleTimeString()+'] '+m); if(P.log.length>50)P.log.pop(); p2pTestRender(); }
+function cleanupP2P(){ if(!P)return;
+  try{ if(P.helloTimer)clearInterval(P.helloTimer); }catch(e){}
+  try{ Object.values(P.peers||{}).forEach(pr=>{ try{pr.dc&&pr.dc.close();}catch(e){} try{pr.pc&&pr.pc.close();}catch(e){} }); }catch(e){}
+  try{ if(P.pc)P.pc.close(); }catch(e){} try{ if(P.dc)P.dc.close(); }catch(e){}
+  try{ if(P.sig&&sb)sb.removeChannel(P.sig); }catch(e){} P=null; }
+function sigSend(payload){ try{ P.sig.send({type:'broadcast',event:'sig',payload}); }catch(e){} }
+
+async function p2pTestHost(){
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveP2P()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Starting local test…</div></div>`;
+  let s; try{ s=await getSB(); }catch(e){ return liveError(); }
+  const code=roomCode();
+  P={role:'host',code,peers:{},log:[]};
+  history.replaceState(null,'','#p2p='+code);
+  P.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
+  P.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to==='host') p2pHostSignal(payload); });
+  P.sig.subscribe(st=>{ if(st==='SUBSCRIBED'){ p2pLog('Hosting — waiting for a guest to join…'); } });
+  p2pTestRender();
+}
+async function p2pHostSignal(m){
+  const gid=m.from;
+  if(m.type==='hello'){
+    if(P.peers[gid]) return;
+    const pc=new RTCPeerConnection(ICE_CONF), peer={pc,dc:null,pending:[],ready:false};
+    P.peers[gid]=peer;
+    pc.onicecandidate=e=>{ if(e.candidate) sigSend({to:gid,from:'host',type:'ice',candidate:e.candidate}); };
+    pc.onconnectionstatechange=()=>{ p2pLog('guest '+gid.slice(0,4)+': '+pc.connectionState); if(pc.connectionState==='failed')p2pLog('⚠️ P2P failed — this network may block direct connections.'); };
+    const dc=pc.createDataChannel('game'); peer.dc=dc; wireDC(dc,gid);
+    const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+    sigSend({to:gid,from:'host',type:'offer',sdp:pc.localDescription});
+    p2pLog('guest '+gid.slice(0,4)+' joining…');
+  } else if(m.type==='answer'){
+    const peer=P.peers[gid]; if(!peer)return; try{ await peer.pc.setRemoteDescription(m.sdp); }catch(e){return;} peer.ready=true;
+    for(const c of peer.pending){ try{ await peer.pc.addIceCandidate(c); }catch(e){} } peer.pending=[];
+  } else if(m.type==='ice'){
+    const peer=P.peers[gid]; if(!peer)return;
+    if(peer.ready){ try{ await peer.pc.addIceCandidate(m.candidate); }catch(e){} } else peer.pending.push(m.candidate);
+  }
+}
+async function p2pTestJoin(code){
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveP2P()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Connecting to ${esc(code)}…</div></div>`;
+  let s; try{ s=await getSB(); }catch(e){ return liveError(); }
+  const gid=(clientId().slice(0,6)+Math.random().toString(36).slice(2,5));
+  P={role:'guest',code,gid,pc:null,dc:null,pending:[],ready:false,log:[]};
+  history.replaceState(null,'','#p2p='+code);
+  P.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
+  P.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to===gid) p2pGuestSignal(payload); });
+  P.sig.subscribe(st=>{ if(st==='SUBSCRIBED'){ sigSend({to:'host',from:gid,type:'hello'}); p2pLog('Saying hello to the host…');
+    P.helloTimer=setInterval(()=>{ if(P&&P.role==='guest'&&!(P.dc&&P.dc.readyState==='open')) sigSend({to:'host',from:P.gid,type:'hello'}); else if(P&&P.helloTimer){clearInterval(P.helloTimer);P.helloTimer=null;} },1800); } });
+  p2pTestRender();
+}
+async function p2pGuestSignal(m){
+  if(m.type==='offer'){
+    if(P.pc) return;
+    const pc=new RTCPeerConnection(ICE_CONF); P.pc=pc;
+    pc.onicecandidate=e=>{ if(e.candidate) sigSend({to:'host',from:P.gid,type:'ice',candidate:e.candidate}); };
+    pc.onconnectionstatechange=()=>{ p2pLog('connection: '+pc.connectionState); if(pc.connectionState==='failed')p2pLog('⚠️ P2P failed — this network may block direct connections.'); };
+    pc.ondatachannel=e=>{ P.dc=e.channel; wireDC(e.channel,'host'); };
+    try{ await pc.setRemoteDescription(m.sdp); }catch(e){return;} P.ready=true;
+    for(const c of P.pending){ try{ await pc.addIceCandidate(c); }catch(e){} } P.pending=[];
+    const ans=await pc.createAnswer(); await pc.setLocalDescription(ans);
+    sigSend({to:'host',from:P.gid,type:'answer',sdp:pc.localDescription});
+  } else if(m.type==='ice'){
+    if(P.pc&&P.ready){ try{ await P.pc.addIceCandidate(m.candidate); }catch(e){} } else P.pending.push(m.candidate);
+  }
+}
+function wireDC(dc,who){
+  dc.onopen=()=>{ p2pLog('✅ data channel OPEN with '+who.slice(0,4)+' — P2P is working!'); };
+  dc.onclose=()=>{ p2pLog('channel closed: '+who.slice(0,4)); };
+  dc.onmessage=ev=>{ let m; try{m=JSON.parse(ev.data);}catch(e){m={t:'raw'};}
+    if(m.t==='ping'){ p2pLog('📩 ping from '+who.slice(0,4)); try{dc.send(JSON.stringify({t:'pong'}));}catch(e){} }
+    else if(m.t==='pong'){ p2pLog('📩 pong from '+who.slice(0,4)+' — round-trip OK ✓'); }
+    else p2pLog('📩 '+ev.data); };
+}
+function p2pPing(){ if(!P)return;
+  if(P.role==='host'){ let sent=0; Object.values(P.peers).forEach(pr=>{ if(pr.dc&&pr.dc.readyState==='open'){ try{pr.dc.send(JSON.stringify({t:'ping'}));sent++;}catch(e){} } }); p2pLog('📤 ping → '+sent+' guest(s)'); }
+  else { try{ if(P.dc&&P.dc.readyState==='open'){P.dc.send(JSON.stringify({t:'ping'}));p2pLog('📤 ping → host');} }catch(e){} } }
+function p2pConnCount(){ if(!P)return 0; if(P.role==='host') return Object.values(P.peers).filter(pr=>pr.dc&&pr.dc.readyState==='open').length; return (P.dc&&P.dc.readyState==='open')?1:0; }
+function p2pTestRender(){ if(!P)return;
+  const isHost=P.role==='host', n=p2pConnCount(), join=location.origin+location.pathname+'#p2p='+P.code;
+  app.innerHTML=topbar('leaveP2P()')+`
+    <div class="lobby">
+      <span class="kicker">P2P test 🔌 ${isHost?'host':'guest'}</span>
+      ${isHost?`<div class="statusline">Open this on another phone on the same wifi, or scan:</div><div class="roomcode">${esc(P.code)}</div><div class="qrbox" id="qr"></div><div class="joinurl">${esc(join)}</div>`:''}
+      <div class="statusline">${isHost?('<b style="color:var(--mango)">'+n+'</b> guest'+(n===1?'':'s')+' connected'):('host: '+(n?'<b style="color:var(--mint)">connected ✅</b>':'connecting…'))}</div>
+      <button class="cta" onclick="p2pPing()" ${n<1?'disabled':''}>Send test ping</button>
+      <div class="conn" style="text-align:left;max-height:240px;overflow:auto;margin-top:14px;font-family:monospace;font-size:12px;white-space:pre-wrap;background:rgba(0,0,0,.2);border-radius:10px;padding:10px">${(P.log||[]).map(esc).join('\n')}</div>
+      <div class="conn" style="margin-top:10px">If the channel opens and ping round-trips, P2P works on this network. 🎉</div>
+    </div>`;
+  if(isHost){ const q=document.getElementById('qr'); if(q) makeQR(join,q); }
+}
+function leaveP2P(){ cleanupP2P(); history.replaceState(null,'',location.pathname); home(); }
+
 /* =================== TOAST + CONFETTI =================== */
 let toastT;
 function flash(msg,err){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.toggle('err',!!err); t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2400); }
@@ -1203,6 +1302,7 @@ function loop(){ ctx.clearRect(0,0,cv.width,cv.height);
 
 /* =================== ROUTER =================== */
 function route(){ const h=location.hash||''; let m;
+  if((m=h.match(/p2p=([A-Za-z0-9]{4})/))){ p2pTestJoin(m[1]); return; }
   if((m=h.match(/join=([A-Za-z0-9]{4})/))){ joinLive(m[1]); return; }
   if((m=h.match(/host=([A-Za-z0-9]{4})/))){ resumeHost(m[1]); return; }
   const sess=loadSession();
