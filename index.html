@@ -487,42 +487,63 @@ function roomCode(){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(l
 function clientId(){ let c; try{c=localStorage.getItem('kp_cid')||sessionStorage.getItem('kp_cid');}catch(e){} if(!c){c=Math.random().toString(36).slice(2)+Date.now().toString(36);} try{localStorage.setItem('kp_cid',c);}catch(e){} try{sessionStorage.setItem('kp_cid',c);}catch(e){} return c; }
 function joinLink(code){ return location.origin+location.pathname+'#join='+code; }
 function cleanupLive(){ try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){} if(L){ if(L.autoTimer)clearTimeout(L.autoTimer); if(L.advTimer)clearTimeout(L.advTimer); if(L.tick)clearInterval(L.tick); if(L.poll)clearInterval(L.poll); if(L.hostPoll)clearInterval(L.hostPoll); } L=null; }
-/* ---- session persistence + connection resilience ---- */
+/* ---- session persistence ---- */
 function saveSession(){ try{ if(L&&L.role==='player'&&L.code) localStorage.setItem('kp_live', JSON.stringify({code:L.code,name:L.name||'',ts:Date.now()})); }catch(e){} }
 function loadSession(){ try{ const o=JSON.parse(localStorage.getItem('kp_live')||'null'); if(o&&o.code&&o.ts&&Date.now()-o.ts<6*3600*1000) return o; }catch(e){} return null; }
 function clearSession(){ try{ localStorage.removeItem('kp_live'); }catch(e){} }
+function saveHostSession(){ try{ if(L&&L.role==='host'&&L.code) localStorage.setItem('kp_host', JSON.stringify({code:L.code,ts:Date.now()})); }catch(e){} }
+function clearHostSession(){ try{ localStorage.removeItem('kp_host'); }catch(e){} }
+/* ---- presence / active players (ghost-proof auto-advance) ---- */
+const ACTIVE_MS=14000;
+function heartbeat(s){ if(!L||!L.pid||!L.code)return; L._hbAt=Date.now();
+  try{ s.from('presence').upsert({room_code:L.code,client_id:clientId(),seen_at:new Date().toISOString()},{onConflict:'room_code,client_id'}).then(()=>{},()=>{}); }catch(e){} }
+function activeFilter(arr){ if(!L||!L.activeIds) return arr; const act=arr.filter(p=>p.client_id&&L.activeIds.has(p.client_id)); return act.length?act:arr; }
+/* ---- connection resilience ---- */
 function subscribeAsPlayer(s){
   try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){}
   liveChan=s.channel('p-'+L.code+'-'+clientId())
     .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms',filter:'code=eq.'+L.code},
       p=>{ if(p.new){ L.room=Object.assign(L.room||{},p.new); onRoomUpdate(); } })
     .subscribe();
-  startPoll();
+  heartbeat(s); startPoll();
 }
 function startPoll(){ stopPoll(); if(!L)return; L.poll=setInterval(playerResync,3000); }
 function stopPoll(){ if(L&&L.poll){ clearInterval(L.poll); L.poll=null; } }
 async function playerResync(){
   if(!L||L.role!=='player'||!L.code) return;
   let s; try{ s=await getSB(); }catch(e){ return; }
-  let room; try{ ({data:room}=await s.from('rooms').select('*').eq('code',L.code).maybeSingle()); }catch(e){ return; }
-  if(!room) return;
+  if(L.pid && (!L._hbAt || Date.now()-L._hbAt>4500)) heartbeat(s);
+  let room,err; try{ ({data:room,error:err}=await s.from('rooms').select('*').eq('code',L.code).maybeSingle()); }catch(e){ return; }
+  if(err) return;
+  if(!room){ if(L.view!=='gone'){ L.view='gone'; stopPoll(); roomGone(); } return; }
   L.room=room; reconcilePlayer();
 }
 function startHostPoll(){ if(!L)return; if(L.hostPoll)clearInterval(L.hostPoll); L.hostPoll=setInterval(hostResync,3500); }
 async function hostResync(){
-  if(!L||L.role!=='host'||L.mode!=='roast'||!L.code) return;
+  if(!L||L.role!=='host'||!L.code) return;
   let s; try{ s=await getSB(); }catch(e){ return; }
   try{ const {data:ps}=await s.from('players').select('*').eq('room_code',L.code); const map={}; (ps||[]).forEach(p=>map[p.id]=p); L.players=map; }catch(e){}
-  if(L.phase==='writing'||L.phase==='voting'){ try{ await loadRoasts(); }catch(e){} }
-  if(L.phase==='voting'){ try{ await loadVotes(); }catch(e){} }
-  const sig=[L.phase,L.cur,Object.keys(L.players).length,(L.roasts||[]).length,(L.votes||[]).length].join('|');
-  if(sig!==L._hsig){ L._hsig=sig; renderRoastHost(); }
-  if(L.phase==='writing') maybeAdvanceWriting(); else if(L.phase==='voting') maybeAdvanceVoting();
+  try{ const {data:pr}=await s.from('presence').select('client_id,seen_at').eq('room_code',L.code); const cutoff=Date.now()-ACTIVE_MS; const set=new Set(); (pr||[]).forEach(r=>{ if(r.seen_at&&Date.parse(r.seen_at)>cutoff) set.add(r.client_id); }); L.activeIds=set; }catch(e){}
+  if(L.mode==='roast'){
+    if(L.phase==='writing'||L.phase==='voting'){ try{ await loadRoasts(); }catch(e){} }
+    if(L.phase==='voting'){ try{ await loadVotes(); }catch(e){} }
+    const ppl=roastPlayers();
+    const sig=[L.phase,L.cur,ppl.length,(L.roasts||[]).length,(L.votes||[]).length].join('|');
+    if(sig!==L._hsig){ L._hsig=sig; renderRoastHost(); }
+    if(L.phase==='writing') maybeAdvanceWriting(); else if(L.phase==='voting') maybeAdvanceVoting();
+  } else {
+    const ppl=hostPlayers();
+    const ans=ppl.filter(p=>(p.last_q|0)>=(L.current_q|0)).length;
+    const sig=[L.status,L.current_q,ppl.length,ans].join('|');
+    if(sig!==L._hsig){ L._hsig=sig; renderHost(); }
+    if(L.status==='playing') maybeAutoAdvance();
+  }
 }
-function liveFocusResync(){ if(!L||!L.code) return; if(L.role==='player') playerResync(); else if(L.role==='host'&&L.mode==='roast') hostResync(); }
+function liveFocusResync(){ if(!L||!L.code) return; if(L.role==='player') playerResync(); else if(L.role==='host') hostResync(); }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) liveFocusResync(); });
 addEventListener('online', liveFocusResync);
 addEventListener('focus', liveFocusResync);
+function roomGone(){ clearSession(); app.innerHTML=topbar()+`<div class="waitcard"><div class="big" style="font-size:44px">🏁</div><div class="rank" style="font-size:22px">Game over</div><div class="sub" style="color:var(--muted);margin:8px 0 18px">The host closed the room. Thanks for playing!</div><button class="cta" onclick="home()">Home</button></div>`; }
 function scoreOf(p){ const set=liveSet(); let s=0; const pk=p.picks||[]; for(let i=0;i<set.length;i++) if(pk[i]===set[i].correct) s++; return s; }
 
 /* ---- HOST (TV) ---- */
@@ -538,13 +559,17 @@ async function hostLive(){
   L={role:'host',code,status:'lobby',current_q:-1,players:{}};
   const {data}=await s.from('players').select('*').eq('room_code',code);
   (data||[]).forEach(p=>L.players[p.id]=p);
-  liveChan=s.channel('room-'+code)
-    .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_code=eq.'+code},
-      p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else L.players[r.id]=r; renderHost(); maybeAutoAdvance(); })
-    .subscribe();
+  subscribeQuizHost(s,code); startHostPoll(); saveHostSession();
   renderHost();
 }
-function hostPlayers(){ return Object.values(L.players); }
+function subscribeQuizHost(s,code){
+  try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){}
+  liveChan=s.channel('room-'+code)
+    .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_code=eq.'+code},
+      p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else { L.players[r.id]=r; if(L.activeIds&&r.client_id)L.activeIds.add(r.client_id); } renderHost(); maybeAutoAdvance(); })
+    .subscribe();
+}
+function hostPlayers(){ return activeFilter(Object.values(L.players)); }
 async function hostStart(){ const s=await getSB(); L.status='playing'; L.current_q=0;
   await s.from('rooms').update({status:'playing',current_q:0}).eq('code',L.code); renderHost(); }
 async function hostNext(){ if(L&&L.autoTimer){ clearTimeout(L.autoTimer); L.autoTimer=null; } const s=await getSB(); const N=liveSet().length;
@@ -658,7 +683,7 @@ function renderRevealSummary(){
       <button class="cta" style="margin-top:18px" onclick="leaveHost()">New game 🔁</button>
     </div>`;
 }
-function leaveHost(){ clearSession(); cleanupLive(); history.replaceState(null,'',location.pathname); home(); }
+function leaveHost(){ clearSession(); clearHostSession(); const c=L&&L.code; if(c){ getSB().then(s=>s.from('rooms').delete().eq('code',c)).catch(()=>{}); } cleanupLive(); history.replaceState(null,'',location.pathname); home(); }
 
 /* ---- PLAYER (phone) ---- */
 function joinPrompt(){
@@ -712,6 +737,10 @@ async function submitName(){
   let pid=null;
   try{ const {data:rows}=await s.from('players').select('id').eq('room_code',L.code).eq('client_id',clientId()).limit(1); if(rows&&rows[0]){ pid=rows[0].id; await s.from('players').update({name}).eq('id',pid); } }catch(e){}
   if(!pid){
+    try{ const {data:others}=await s.from('players').select('name,client_id').eq('room_code',L.code);
+      const taken=new Set((others||[]).filter(o=>o.client_id!==clientId()).map(o=>(o.name||'').trim().toLowerCase()));
+      if(taken.has(name.toLowerCase())){ const base=name.slice(0,13); let n=2; while(n<99&&taken.has((base+' '+n).toLowerCase()))n++; name=base+' '+n; }
+    }catch(e){}
     const {data,error}=await s.from('players').insert({room_code:L.code,name,client_id:clientId(),picks:L.picks||[],last_q:-1,score:0}).select().single();
     if(error){
       const {data:rows}=await s.from('players').select('id').eq('room_code',L.code).eq('client_id',clientId()).limit(1);
@@ -818,9 +847,14 @@ async function roastLive(){
   L={role:'host',mode:'roast',code,phase:'lobby',cur:-1,players:{},roasts:[],votes:[],phaseEndsAt:0};
   const {data}=await s.from('players').select('*').eq('room_code',code);
   (data||[]).forEach(p=>L.players[p.id]=p);
+  subscribeRoastHost(s,code); startHostPoll(); saveHostSession();
+  renderRoastHost();
+}
+function subscribeRoastHost(s,code){
+  try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){}
   liveChan=s.channel('roast-'+code)
     .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_code=eq.'+code},
-      p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else L.players[r.id]=r;
+      p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else { L.players[r.id]=r; if(L.activeIds&&r.client_id)L.activeIds.add(r.client_id); }
            renderRoastHost(); if(L.phase==='writing')maybeAdvanceWriting(); else if(L.phase==='voting')maybeAdvanceVoting(); })
     .on('postgres_changes',{event:'INSERT',schema:'public',table:'roasts',filter:'room_code=eq.'+code},
       p=>{ if(!p.new)return; if(!L.roasts.some(r=>r.id===p.new.id))L.roasts.push(p.new);
@@ -829,10 +863,32 @@ async function roastLive(){
       p=>{ if(!p.new)return; if(!L.votes.some(v=>v.id===p.new.id))L.votes.push(p.new);
            if(L.phase==='voting'){ renderRoastHost(); maybeAdvanceVoting(); } })
     .subscribe();
-  startHostPoll();
-  renderRoastHost();
 }
-function roastPlayers(){ return Object.values(L.players); }
+async function resumeHost(code){
+  cleanupLive();
+  app.innerHTML=topbar()+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Reconnecting room ${esc(code)}…</div><div class="conn">Picking up where you left off</div></div>`;
+  let s; try{ s=await getSB(); }catch(e){ return liveError(); }
+  const {data:room}=await s.from('rooms').select('*').eq('code',code).maybeSingle();
+  if(!room){ clearHostSession(); home(); return; }
+  const {data:ps}=await s.from('players').select('*').eq('room_code',code);
+  if((room.mode||'quiz')==='roast'){
+    L={role:'host',mode:'roast',code,phase:room.phase||'lobby',cur:(room.cur_photo==null?-1:room.cur_photo),players:{},roasts:[],votes:[],phaseEndsAt:0};
+    (ps||[]).forEach(p=>L.players[p.id]=p);
+    try{ await loadRoasts(); }catch(e){} try{ await loadVotes(); }catch(e){}
+    subscribeRoastHost(s,code); startHostPoll(); saveHostSession();
+    if(L.phase==='writing'){ const ends=room.phase_ends_at?Date.parse(room.phase_ends_at):Date.now(); L.phaseEndsAt=ends; L.advTimer=setTimeout(()=>advanceWriting(),Math.max(0,ends-Date.now())); }
+    history.replaceState(null,'','#host='+code);
+    renderRoastHost();
+    if(L.phase==='writing') startTick();
+  } else {
+    L={role:'host',code,status:room.status||'lobby',current_q:(room.current_q==null?-1:room.current_q),players:{}};
+    (ps||[]).forEach(p=>L.players[p.id]=p);
+    subscribeQuizHost(s,code); startHostPoll(); saveHostSession();
+    history.replaceState(null,'','#host='+code);
+    renderHost();
+  }
+}
+function roastPlayers(){ return activeFilter(Object.values(L.players)); }
 async function loadRoasts(){ const s=await getSB(); const {data}=await s.from('roasts').select('*').eq('room_code',L.code); L.roasts=data||[]; }
 async function loadVotes(){ const s=await getSB(); const {data}=await s.from('roast_votes').select('*').eq('room_code',L.code); L.votes=data||[]; }
 
@@ -843,7 +899,7 @@ async function roastGoto(phase,idx){
   const patch={phase,cur_photo:idx};
   if(phase==='writing'){ L.phaseEndsAt=Date.now()+ROAST_SECONDS*1000; patch.phase_ends_at=new Date(L.phaseEndsAt).toISOString();
     L.advTimer=setTimeout(()=>advanceWriting(),ROAST_SECONDS*1000); }
-  if(phase==='voting'){ await loadRoasts(); }
+  if(phase==='voting'){ await loadRoasts(); if(L.roasts.filter(r=>r.photo_idx===idx).length===0){ setTimeout(()=>{ if(L&&L.phase==='voting'&&L.cur===idx) advanceVoting(); },2500); } }
   if(phase==='reveal'){ await loadRoasts(); await loadVotes(); }
   await s.from('rooms').update(patch).eq('code',L.code);
   renderRoastHost();
@@ -1074,7 +1130,7 @@ function loop(){ ctx.clearRect(0,0,cv.width,cv.height);
 /* =================== ROUTER =================== */
 function route(){ const h=location.hash||''; let m;
   if((m=h.match(/join=([A-Za-z0-9]{4})/))){ joinLive(m[1]); return; }
-  if((m=h.match(/host=([A-Za-z0-9]{4})/))){ hostLive(); return; }
+  if((m=h.match(/host=([A-Za-z0-9]{4})/))){ resumeHost(m[1]); return; }
   const sess=loadSession();
   if(sess&&sess.code){ joinLive(sess.code); return; }
   home(); }
