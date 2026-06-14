@@ -373,6 +373,7 @@ function home(){
     <button class="editbtn" onclick="editor()">✏️ Edit photos, questions &amp; title</button>
     <button class="editbtn" onclick="newGame()" style="margin-top:8px">✨ Make it about a different friend</button>
     <button class="editbtn" onclick="hostLiveP2P()" style="margin-top:8px">🎮 Party Mode — local P2P (beta)</button>
+    <button class="editbtn" onclick="roastLiveP2P()" style="margin-top:8px">😈 Roast Battle — local P2P (beta)</button>
     <div class="home-foot"><button class="linklike" onclick="joinPrompt()">On your phone? Join a live game →</button></div>
     <div class="home-foot"><button class="linklike" onclick="p2pTestHost()" style="opacity:.7">🔌 Test local P2P connection (beta)</button></div>
     <div class="home-foot">${GAME.name?('Made for '+esc(GAME.name)+' • '):''}${new Date().getFullYear()}</div>
@@ -905,12 +906,12 @@ function liveError(msg){
 /* =================== ROAST BATTLE (Supabase, host-paced) =================== */
 const ROAST_SECONDS=120;
 function fmtClock(s){ s=Math.max(0,s|0); const m=Math.floor(s/60), ss=s%60; return m+':'+String(ss).padStart(2,'0'); }
-function roastSet(){ return (DEFAULT_GAME.roastSet||[]).filter(p=>p&&p.img); }
+function roastSet(){ return (((L&&L.net==='p2p'&&L.role==='host')?GAME:DEFAULT_GAME).roastSet||[]).filter(p=>p&&p.img); }
 function clearTick(){ if(L&&L.tick){ clearInterval(L.tick); L.tick=null; } }
 function clearTimers(){ if(!L)return; if(L.advTimer){clearTimeout(L.advTimer);L.advTimer=null;} clearTick(); }
 function startTick(){ clearTick(); if(!L)return;
   L.tick=setInterval(()=>{ const el=document.getElementById('rtimer'); if(!el)return;
-    const ends=L.role==='host'?(L.phaseEndsAt||0):(L.room&&L.room.phase_ends_at?Date.parse(L.room.phase_ends_at):0);
+    const ends=L.role==='host'?(L.phaseEndsAt||0):(L.net==='p2p'?(L.guestEndsAt||0):(L.room&&L.room.phase_ends_at?Date.parse(L.room.phase_ends_at):0));
     el.textContent=fmtClock(Math.ceil((ends-Date.now())/1000)); },250); }
 
 /* ---- HOST (TV) ---- */
@@ -971,7 +972,7 @@ function roastPlayers(){ return activeFilter(Object.values(L.players)); }
 async function loadRoasts(){ const s=await getSB(); const {data}=await s.from('roasts').select('*').eq('room_code',L.code); L.roasts=data||[]; }
 async function loadVotes(){ const s=await getSB(); const {data}=await s.from('roast_votes').select('*').eq('room_code',L.code); L.votes=data||[]; }
 
-function roastStart(){ roastGoto('writing',0); }
+function roastStart(){ if(L&&L.net==='p2p') return roastStartP2P(); roastGoto('writing',0); }
 async function roastGoto(phase,idx){
   const s=await getSB();
   clearTimers(); L.phase=phase; L.cur=idx;
@@ -984,12 +985,12 @@ async function roastGoto(phase,idx){
   renderRoastHost();
   if(phase==='writing') startTick();
 }
-function advanceWriting(){ if(!L||L.phase!=='writing')return; const key='w'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
+function advanceWriting(){ if(L&&L.net==='p2p') return advanceWritingP2P(); if(!L||L.phase!=='writing')return; const key='w'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
   const N=roastSet().length; if(L.cur<N-1) roastGoto('writing',L.cur+1); else roastGoto('voting',0); }
 function maybeAdvanceWriting(){ if(!L||L.phase!=='writing')return; const ppl=roastPlayers(); if(ppl.length<1)return; const at=L.cur;
   const got=new Set(L.roasts.filter(r=>r.photo_idx===at).map(r=>r.author_id));
   if(ppl.every(p=>got.has(p.id))) setTimeout(()=>{ if(L&&L.phase==='writing'&&L.cur===at) advanceWriting(); },700); }
-function advanceVoting(){ if(!L||L.phase!=='voting')return; const key='v'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
+function advanceVoting(){ if(L&&L.net==='p2p') return advanceVotingP2P(); if(!L||L.phase!=='voting')return; const key='v'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
   const N=roastSet().length; if(L.cur<N-1) roastGoto('voting',L.cur+1); else roastGoto('reveal',0); }
 function maybeAdvanceVoting(){ if(!L||L.phase!=='voting')return; const ppl=roastPlayers(); if(ppl.length<1)return; const at=L.cur;
   const rs=L.roasts.filter(r=>r.photo_idx===at); const eligible=ppl.filter(p=>rs.some(r=>r.author_id!==p.id));
@@ -1339,12 +1340,20 @@ function pgHostMsg(gid,o){
     const name=pgUniqueName(o.name,gid);
     L.players[gid]={id:gid,client_id:gid,name,last_q:-1,picks:[]};
     pgSendTo(gid,{t:'joined',pid:gid,name});
-    pgSendTo(gid,pgRoom());
-    renderHost();
+    if(L.mode==='roast'){ pgSendTo(gid,pgRoastRoom()); renderRoastHost(); }
+    else { pgSendTo(gid,pgRoom()); renderHost(); }
   } else if(o.t==='answer'){
     const p=L.players[gid]; if(!p)return;
     if(p.picks[o.qi]==null){ p.picks[o.qi]=o.opt; p.last_q=Math.max(p.last_q|0,o.qi|0); }
     renderHost(); pgMaybeAutoAdvance();
+  } else if(o.t==='roast'){
+    if(L.mode!=='roast')return; const p=L.players[gid]; if(!p)return;
+    if(!L.roasts.some(r=>r.author_id===gid&&r.photo_idx===o.cur)) L.roasts.push({id:gid+'_'+o.cur,photo_idx:o.cur|0,author_id:gid,author_name:p.name,text:(o.text||'').slice(0,140)});
+    renderRoastHost(); maybeAdvanceWritingP2P();
+  } else if(o.t==='vote'){
+    if(L.mode!=='roast')return; const p=L.players[gid]; if(!p)return;
+    if(!L.votes.some(v=>v.voter_id===gid&&v.photo_idx===o.cur)) L.votes.push({id:gid+'_v'+o.cur,photo_idx:o.cur|0,roast_id:o.roastId,voter_id:gid});
+    renderRoastHost(); maybeAdvanceVotingP2P();
   }
 }
 function pgRoom(){ const set=pgSet(); const Q=(L.status==='playing'&&L.current_q>=0)?set[L.current_q]:null;
@@ -1361,13 +1370,53 @@ function pgMaybeAutoAdvance(){ if(!L||L.role!=='host'||L.net!=='p2p'||L.status!=
   L.autoTimer=setTimeout(()=>{ L.autoTimer=null; if(!L||L.status!=='playing'||L.current_q!==at)return;
     const now=Object.values(L.players); if(now.length>=1&&now.every(p=>(p.last_q|0)>=at)) pgHostNext(); },1600); }
 
+/* ---- P2P roast battle (host) ---- */
+async function roastLiveP2P(){
+  if(((GAME.roastSet||[]).filter(p=>p&&p.img)).length<1){ flash("Add roast photos in Edit first",true); editor('roastset'); return; }
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveHost()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Starting a local roast room…</div></div>`;
+  let s; try{ s=await getSB(); }catch(e){ return liveError(); }
+  const code=roomCode();
+  L={role:'host',net:'p2p',mode:'roast',code,phase:'lobby',cur:-1,players:{},peers:{},roasts:[],votes:[],phaseEndsAt:0};
+  history.replaceState(null,'','#pg='+code);
+  L.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
+  L.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to==='host') pgHostSignal(payload); });
+  L.sig.subscribe();
+  renderRoastHost();
+}
+function roastStartP2P(){ roastGotoP2P('writing',0); }
+function roastGotoP2P(phase,idx){
+  clearTimers(); L.phase=phase; L.cur=idx;
+  if(phase==='writing'){ L.phaseEndsAt=Date.now()+ROAST_SECONDS*1000; L.advTimer=setTimeout(()=>advanceWritingP2P(),ROAST_SECONDS*1000); }
+  if(phase==='voting'){ if(L.roasts.filter(r=>r.photo_idx===idx).length===0){ setTimeout(()=>{ if(L&&L.phase==='voting'&&L.cur===idx) advanceVotingP2P(); },2500); } }
+  pgBroadcast(pgRoastRoom());
+  renderRoastHost();
+  if(phase==='writing') startTick();
+}
+function advanceWritingP2P(){ if(!L||L.phase!=='writing')return; const key='w'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
+  const N=roastSet().length; if(L.cur<N-1) roastGotoP2P('writing',L.cur+1); else roastGotoP2P('voting',0); }
+function maybeAdvanceWritingP2P(){ if(!L||L.phase!=='writing')return; const ppl=roastPlayers(); if(ppl.length<1)return; const at=L.cur;
+  const got=new Set(L.roasts.filter(r=>r.photo_idx===at).map(r=>r.author_id));
+  if(ppl.every(p=>got.has(p.id))) setTimeout(()=>{ if(L&&L.phase==='writing'&&L.cur===at) advanceWritingP2P(); },700); }
+function advanceVotingP2P(){ if(!L||L.phase!=='voting')return; const key='v'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
+  const N=roastSet().length; if(L.cur<N-1) roastGotoP2P('voting',L.cur+1); else roastGotoP2P('reveal',0); }
+function maybeAdvanceVotingP2P(){ if(!L||L.phase!=='voting')return; const ppl=roastPlayers(); if(ppl.length<1)return; const at=L.cur;
+  const rs=L.roasts.filter(r=>r.photo_idx===at); const eligible=ppl.filter(p=>rs.some(r=>r.author_id!==p.id));
+  const voters=new Set(L.votes.filter(v=>v.photo_idx===at).map(v=>v.voter_id));
+  if(eligible.length>0 && eligible.every(p=>voters.has(p.id))) setTimeout(()=>{ if(L&&L.phase==='voting'&&L.cur===at) advanceVotingP2P(); },700); }
+function pgRoastRoom(){ const set=roastSet(); const phase=L.phase||'lobby', cur=L.cur|0;
+  const msg={t:'rroom',phase,cur,total:set.length};
+  if(phase==='writing') msg.endsIn=Math.max(0,(L.phaseEndsAt||0)-Date.now());
+  if(phase==='voting') msg.roasts=L.roasts.filter(r=>r.photo_idx===cur).map(r=>({id:r.id,text:r.text,author:r.author_id}));
+  return msg; }
+
 /* ---- P2P guest (phone) ---- */
 async function joinP2P(code){
   cleanupLive(); cleanupP2P();
   app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Connecting to ${esc(code)}…</div></div>`;
   let s; try{ s=await getSB(); }catch(e){ return liveError(); }
   const gid=(clientId().slice(0,6)+Math.random().toString(36).slice(2,5));
-  L={role:'player',net:'p2p',mode:'quiz',code,gid,pc:null,dc:null,pending:[],ready:false,name:null,picks:[],room:null};
+  L={role:'player',net:'p2p',mode:'quiz',code,gid,pc:null,dc:null,pending:[],ready:false,name:null,picks:[],room:null,rroom:null,subs:{},voted:{}};
   history.replaceState(null,'','#pg='+code);
   L.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
   L.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to===gid) pgGuestSignal(payload); });
@@ -1394,8 +1443,8 @@ function pgGuestReady(){ if(L&&L.helloTimer){clearInterval(L.helloTimer);L.hello
 function pgGuestMsg(o){
   if(!L||L.role!=='player')return;
   if(o.t==='joined'){ L.pid=o.pid; L.name=o.name; }
-  else if(o.t==='room'){ L.room={status:o.status,current_q:o.current_q,total:o.total}; L.q=o.q; pgGuestRender(); }
-  else if(o.t==='go'){ pgGuestRender(); }
+  else if(o.t==='room'){ L.mode='quiz'; L.room={status:o.status,current_q:o.current_q,total:o.total}; L.q=o.q; pgGuestRender(); }
+  else if(o.t==='rroom'){ L.mode='roast'; if(o.phase==='writing') L.guestEndsAt=Date.now()+(o.endsIn||0); L.rroom={phase:o.phase,cur:o.cur,total:o.total,roasts:o.roasts}; pgRoastGuestRender(); }
 }
 function submitNameP2P(){ const el=document.getElementById('myname'); const name=(el.value||'').trim().slice(0,16); if(!name){ flash("Add a name first",true); return; } L.name=name; pgSend({t:'join',name}); renderPlayerWait(); }
 function pgGuestRender(){
@@ -1437,6 +1486,64 @@ function pgPlayerFinal(){
       <div class="rank">Votes in!</div>
       <div class="sub">Thanks, ${esc(L.name)} — you voted on ${voted} of ${tot}. The room's verdict is rolling out on the TV. 📺</div>
       <button class="cta alt" style="margin-top:16px" onclick="leavePlayer()">Done</button></div>`;
+}
+function pgRoastGuestRender(){
+  if(!L||!L.rroom){ roastPlayerWait(); return; }
+  const r=L.rroom, ph=r.phase, cur=r.cur|0;
+  if(ph==='lobby'){ roastPlayerWait(); return; }
+  if(ph==='reveal'||ph==='done'){ clearTick(); roastPlayerFinal(); return; }
+  if(ph==='writing'){
+    if(L.subs&&L.subs[cur]){ clearTick(); return pgRoastWaitMsg('Roast locked in 🔥','Watch the TV — next photo soon.',cur); }
+    return pgRoastWrite(cur);
+  }
+  clearTick();
+  if(L.voted&&L.voted[cur]) return pgRoastWaitMsg('Vote locked 🗳️','Watch the TV for the results.',cur);
+  return pgRoastVote(cur);
+}
+function pgRoastWrite(cur){
+  app.innerHTML=`
+    <div class="turnbanner">✍️ <b>${esc(L.name)}</b><span class="pill">${esc(L.code)} · ⏱ <span id="rtimer">${fmtClock(Math.ceil(((L.guestEndsAt||0)-Date.now())/1000))}</span></span></div>
+    <div class="qcard"><div class="qbody" style="padding-top:20px">
+      <div class="qnum">Photo ${cur+1} of ${L.rroom.total} — look at the TV 📺</div>
+      <div class="qtext" style="font-size:18px;margin:6px 0 10px">Roast this photo 🔥</div>
+      <textarea id="rtext" maxlength="140" rows="3" placeholder="Type your funniest roast…" style="width:100%;box-sizing:border-box;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--ink);font-family:'Inter';font-size:16px;padding:12px;resize:none"></textarea>
+      <button class="cta" style="margin-top:12px" onclick="pgRoastSubmit(${cur})">Send roast →</button>
+      <div class="conn" style="margin-top:8px">Keep it short &amp; savage. Auto-locks when time runs out.</div>
+    </div></div>`;
+  startTick();
+  setTimeout(()=>{const e=document.getElementById('rtext');if(e)e.focus();},50);
+}
+function pgRoastSubmit(cur){
+  const el=document.getElementById('rtext'); const text=(el?el.value:'').trim().slice(0,140);
+  if(!text){ flash("Type a roast first",true); return; }
+  if(!L.subs)L.subs={}; if(L.subs[cur])return; L.subs[cur]=true;
+  pgSend({t:'roast',cur,text});
+  clearTick(); pgRoastWaitMsg('Roast locked in 🔥','Watch the TV — next photo soon.',cur);
+}
+function pgRoastVote(cur){
+  let rs=((L.rroom.roasts)||[]).filter(x=>x.author!==L.pid);
+  for(let i=rs.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=rs[i]; rs[i]=rs[j]; rs[j]=t; }
+  if(!rs.length){ return pgRoastWaitMsg('Nothing to vote here','Your roast is in. Watch the TV. 📺',cur); }
+  app.innerHTML=`
+    <div class="turnbanner">🗳️ <b>${esc(L.name)}</b><span class="pill">${esc(L.code)} · ${cur+1}/${L.rroom.total}</span></div>
+    <div class="qcard"><div class="qbody" style="padding-top:20px">
+      <div class="qnum">Photo ${cur+1} — vote the funniest 🔥</div>
+      <div class="opts">${rs.map(x=>`<button class="opt" style="text-align:left" onclick="pgVote(${cur},'${x.id}')"><span>${esc(x.text)}</span></button>`).join('')}</div>
+    </div></div>
+    <footer class="credit">You can't vote for your own roast.</footer>`;
+  window.scrollTo({top:0});
+}
+function pgVote(cur,roastId){
+  if(!L.voted)L.voted={}; if(L.voted[cur])return; L.voted[cur]=true;
+  pgSend({t:'vote',cur,roastId});
+  pgRoastWaitMsg('Vote locked 🗳️','Watch the TV for the results.',cur);
+}
+function pgRoastWaitMsg(title,sub,cur){
+  app.innerHTML=topbar('leavePlayer()')+`
+    <div class="lockcard"><div class="big">✅</div>
+      <div class="rank">${esc(title)}</div>
+      <div class="sub">${esc(sub)}</div>
+      <div class="conn" style="margin-top:14px">Photo ${(cur|0)+1} of ${L.rroom?L.rroom.total:'?'} · room ${esc(L.code)}</div></div>`;
 }
 function pgGuestLost(){ if(!L)return; app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="rank" style="font-size:22px">Lost connection to host</div><div class="sub" style="color:var(--muted);margin:10px 0 18px">The host may have closed the room or left wifi range.</div><button class="cta" onclick="home()">Home</button></div>`; }
 
