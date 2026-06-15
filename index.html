@@ -317,7 +317,7 @@ const THEMES={
 };
 function applyTheme(){ const t=THEMES[GAME.theme]||THEMES.mango; const r=document.documentElement.style;
   r.setProperty('--mango',t.a); r.setProperty('--mango-d',t.ad); r.setProperty('--coral',t.b); r.setProperty('--coral-d',t.bd);
-  try{ document.title=(GAME.name?GAME.name:'Party')+'pedia'; }catch(e){} }
+  try{ document.title=APP_NAME; }catch(e){} }
 function brandName(){ return (GAME.name||'PARTY').toUpperCase(); }
 applyTheme();
 
