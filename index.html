@@ -293,6 +293,12 @@ function loadGame(){
 }
 let GAME = loadGame();
 function saveLocal(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(GAME)); return true; }catch(e){ return false; } }
+/* Product identity + authorship flag (generic landing until the user makes their own) */
+const APP_NAME='Partypedia';
+function userOwns(){ try{ return localStorage.getItem('kp_own')==='1'; }catch(e){ return false; } }
+function markOwn(){ try{ localStorage.setItem('kp_own','1'); }catch(e){} }
+function clearOwn(){ try{ localStorage.removeItem('kp_own'); }catch(e){} }
+function slug(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'party'; }
 
 /* =================== THEME + TEMPLATE =================== */
 const THEMES={
@@ -332,9 +338,9 @@ function createGame(){
   const name=(document.getElementById('ng_name').value||'').trim().slice(0,20);
   if(!name){ flash("Add a name first",true); return; }
   GAME={name, theme:(window._ngTheme||'mango'), tagline:`Certified ${name} slander 🔥`, sub:`How well do you really know ${name}?`, questions:[], roast:[], roastSet:[]};
-  saveLocal(); applyTheme(); flash("Game created ✓"); editor('quiz');
+  saveLocal(); markOwn(); applyTheme(); flash("Game created ✓"); editor('quiz');
 }
-function loadKaran(){ try{ localStorage.removeItem(LS_KEY); }catch(e){} GAME=deep(DEFAULT_GAME); saveLocal(); applyTheme(); flash("Karan demo loaded ✓"); home(); }
+function loadKaran(){ try{ localStorage.removeItem(LS_KEY); }catch(e){} GAME=deep(DEFAULT_GAME); saveLocal(); markOwn(); applyTheme(); flash("Demo loaded ✓"); home(); }
 
 const RANKS=[
   {min:1.0,name:"Karan's Soulmate",sub:"Concerning how well you know this man. Eshani, is that you?"},
@@ -355,32 +361,44 @@ function quizPlayable(){ return GAME.questions.filter(q=>q&&q.img&&(q.opts||[]).
 /* =================== HOME =================== */
 function home(){
   applyTheme();
+  const own=userOwns();
   const faces=(GAME.questions||[]).filter(q=>q.img).slice(0,5).map(q=>`<img src="${q.img}" alt="">`).join('');
-  const brand=brandName(), big=brand.length<=6;
-  app.innerHTML = `
-    <section class="hero">
-      <span class="kicker">${esc(GAME.tagline||'Roast night 🔥')}</span>
-      <h1 style="font-size:clamp(40px,${big?'17vw':'12vw'},${big?'82px':'56px'})"><span class="a">${esc(brand)}</span><br><span class="b">PEDIA</span></h1>
-      ${GAME.sub?`<p>${esc(GAME.sub)}</p>`:''}
-      <div class="facepile">${faces}</div>
-    </section>
+  // Generic, product-branded hero until the organiser makes the game their own.
+  const hero = own
+    ? `<section class="hero">
+        <span class="kicker">${esc(GAME.tagline||'Roast night 🔥')}</span>
+        <h1 style="font-size:clamp(40px,${brandName().length<=6?'17vw':'12vw'},${brandName().length<=6?'82px':'56px'})"><span class="a">${esc(brandName())}</span><br><span class="b">PEDIA</span></h1>
+        ${GAME.sub?`<p>${esc(GAME.sub)}</p>`:''}
+        <div class="facepile">${faces}</div>
+      </section>`
+    : `<section class="hero">
+        <span class="kicker">Party games about your friends 🎉</span>
+        <h1 style="font-size:clamp(40px,16vw,80px)"><span class="a">PARTY</span><br><span class="b">PEDIA</span></h1>
+        <p>Make a photo quiz or a roast battle about anyone in the room — everyone plays on their phone, no app to install.</p>
+        <div class="facepile">${faces}</div>
+      </section>`;
+  app.innerHTML = hero + `
     <div class="modes">
       <button class="mode m4" onclick="hostLive()"><span class="ico">📺</span>
-        <span><span class="mt">Party Mode</span><span class="ms">Host on the TV · everyone joins by QR</span></span></button>
+        <span><span class="mt">Party Mode</span><span class="ms">Photo quiz · host on the TV · everyone joins by QR</span></span></button>
       <button class="mode m2" onclick="roastLive()"><span class="ico">😈</span>
         <span><span class="mt">Roast Battle</span><span class="ms">Host on TV · everyone writes roasts · vote the best</span></span></button>
     </div>
-    <button class="editbtn" onclick="editor()">✏️ Edit photos, questions &amp; title</button>
-    <button class="editbtn" onclick="newGame()" style="margin-top:8px">✨ Make it about a different friend</button>
-    <button class="editbtn" onclick="hostLiveP2P()" style="margin-top:8px">🎮 Party Mode — local P2P (beta)</button>
-    <button class="editbtn" onclick="roastLiveP2P()" style="margin-top:8px">😈 Roast Battle — local P2P (beta)</button>
+    ${own
+      ? `<button class="editbtn" onclick="editor()">✏️ Edit photos, questions &amp; title</button>
+         <button class="editbtn" onclick="newGame()" style="margin-top:8px">✨ Make it about a different friend</button>`
+      : `<button class="editbtn" onclick="newGame()">✨ Make your own game</button>
+         <button class="editbtn" onclick="editor()" style="margin-top:8px">📥 Bulk-upload photos &amp; add questions</button>
+         <button class="editbtn" onclick="loadKaran()" style="margin-top:8px">👀 Try the demo game</button>`}
+    <button class="editbtn" onclick="hostLiveP2P()" style="margin-top:8px">🎮 Party Mode — same room, no internet (beta)</button>
+    <button class="editbtn" onclick="roastLiveP2P()" style="margin-top:8px">😈 Roast Battle — same room, no internet (beta)</button>
     <div class="home-foot"><button class="linklike" onclick="joinPrompt()">On your phone? Join a live game →</button></div>
     <div class="home-foot"><button class="linklike" onclick="p2pTestHost()" style="opacity:.7">🔌 Test local P2P connection (beta)</button></div>
-    <div class="home-foot">${GAME.name?('Made for '+esc(GAME.name)+' • '):''}${new Date().getFullYear()}</div>
+    <div class="home-foot">${own&&GAME.name?('Made for '+esc(GAME.name)+' • '):APP_NAME+' • '}${new Date().getFullYear()}</div>
     <footer class="credit"><b>Party Mode</b> needs internet for everyone and works best on a TV/laptop the group can see.</footer>`;
 }
 function topbar(back){
-  return `<div class="topbar"><div class="brandmini"><span class="dotk">K</span>Karanpedia</div>
+  return `<div class="topbar"><div class="brandmini"><span class="dotk">${esc(APP_NAME[0])}</span>${esc(APP_NAME)}</div>
     <button class="ghostbtn" onclick="${back||'home()'}">↩ ${back?'Back':'Home'}</button></div>`;
 }
 
@@ -409,8 +427,18 @@ function editor(tab){
         <button class="tab ${!isQuiz?'on':''}" onclick="editor('roastset')">Roast photos (${(GAME.roastSet||[]).length})</button>
       </div>
       <div id="list" class="qlist"></div>
-      <button class="addq" onclick="${isQuiz?'addQuestion()':'addRoastPhoto()'}">➕ Add ${isQuiz?'a question':'a roast photo'}</button>
-      ${isQuiz?'':'<p class="h" style="margin-top:8px">Shown one-by-one in Roast Battle — players write a roast for each photo.</p>'}
+      ${isQuiz?`
+      <button class="addq" onclick="bulkAddQuiz()">📥 Bulk-upload photos</button>
+      <button class="addq" onclick="addQuestion()" style="margin-top:8px">➕ Add one question</button>
+      <div class="edsec" style="margin-top:14px"><h3>Questions by spreadsheet</h3>
+        <p class="h" style="margin-bottom:10px">Bulk-upload your photos, download the template, type a question + options next to each photo's filename, then upload it back. We match every row to its photo automatically — even if you uploaded them in a random order.</p>
+        <div class="btnrow">
+          <button class="cta alt" onclick="downloadQuizCSV()">⬇ Download CSV template</button>
+          <button class="cta alt" onclick="uploadQuizCSV()">⬆ Upload filled CSV</button>
+        </div></div>`
+      :`
+      <button class="addq" onclick="bulkAddRoast()">📥 Bulk-upload roast photos</button>
+      <p class="h" style="margin-top:8px">Pick as many as you like at once. Shown one-by-one in Roast Battle — players write a roast for each photo.</p>`}
 
       <div class="edsec"><h3>Share your version</h3>
         <p class="h" style="margin-bottom:12px">Photos are too big for a link, so download a fresh game file with everything baked in and share that file. Everyone who opens it gets your version.</p>
@@ -427,7 +455,7 @@ function editor(tab){
 function pickThemeEd(k){ GAME.theme=k; applyTheme(); document.querySelectorAll('#ed_sw .sw').forEach(b=>b.classList.toggle('on',b.dataset.t===k)); }
 function saveTitle(){ const n=document.getElementById('g_name'); if(n) GAME.name=(n.value||'').trim().slice(0,20);
   GAME.tagline=(document.getElementById('g_tag').value||'').trim(); GAME.sub=(document.getElementById('g_sub').value||'').trim();
-  saveLocal(); applyTheme(); flash("Saved ✓"); }
+  saveLocal(); markOwn(); applyTheme(); flash("Saved ✓"); }
 function renderRoastPhotos(){
   const wrap=document.getElementById('list'); if(!wrap) return;
   const arr=GAME.roastSet||[];
@@ -443,10 +471,12 @@ function renderList(){
   const L=curList();
   if(!L.length){ wrap.innerHTML=`<div class="qrow"><div class="meta"><div class="t" style="color:var(--muted)">Nothing here yet. Tap “Add” below.</div></div></div>`; return; }
   wrap.innerHTML=L.map((q,i)=>{
-    const title = q.q||'Untitled question';
+    const ready = q.q && (q.opts||[]).filter(o=>o&&o.trim()).length>=2;
+    const title = q.q || (q.file? esc(q.file) : 'No question yet');
+    const sub = ready ? '' : `<div class="t" style="color:var(--coral);font-weight:700;font-size:12px">⚠ needs a question &amp; 2+ options</div>`;
     return `<div class="qrow">
       ${q.img?`<img class="thumb" src="${q.img}" alt="">`:`<div class="thumb empty">🖼️</div>`}
-      <div class="meta"><div class="n">Q${i+1}</div><div class="t">${esc(title)}</div></div>
+      <div class="meta"><div class="n">Q${i+1}</div><div class="t">${esc(title)}</div>${sub}</div>
       <div class="acts">
         <div class="minirow">
           <button class="mini" onclick="moveItem(${i},-1)" ${i===0?'disabled style=opacity:.3':''}>▲</button>
@@ -462,8 +492,8 @@ function moveItem(i,d){ const L=curList(); const j=i+d; if(j<0||j>=L.length) ret
 function delItem(i){ if(!confirm('Delete this?')) return; curList().splice(i,1); saveLocal(); renderList(); }
 
 /* ---- quiz question form ---- */
-function addQuestion(){ draft={q:'',img:'',wide:false,roast:'',options:[{text:'',correct:true},{text:'',correct:false}]}; draftIdx=-1; renderQEdit(); }
-function editQuestion(i){ const Q=GAME.questions[i]; draft={q:Q.q||'',img:Q.img||'',wide:!!Q.wide,roast:Q.roast||'',options:(Q.opts||[]).map((t,j)=>({text:t,correct:j===(Q.correct|0)}))}; if(draft.options.length<2) draft.options=[{text:'',correct:true},{text:'',correct:false}]; draftIdx=i; renderQEdit(); }
+function addQuestion(){ draft={q:'',img:'',file:'',wide:false,roast:'',options:[{text:'',correct:true},{text:'',correct:false}]}; draftIdx=-1; renderQEdit(); }
+function editQuestion(i){ const Q=GAME.questions[i]; draft={q:Q.q||'',img:Q.img||'',file:Q.file||'',wide:!!Q.wide,roast:Q.roast||'',options:(Q.opts||[]).map((t,j)=>({text:t,correct:j===(Q.correct|0)}))}; if(draft.options.length<2) draft.options=[{text:'',correct:true},{text:'',correct:false}]; draftIdx=i; renderQEdit(); }
 function renderQEdit(){
   app.innerHTML = topbar('editor()')+`
     <section class="ed"><h2>${draftIdx<0?'New question':'Edit question'}</h2>
@@ -505,22 +535,44 @@ function saveQuestion(){
   const filled=draft.options.filter(o=>o.text.trim());
   if(!draft.q.trim()){ flash("Add a question first",true); return; }
   if(filled.length<2){ flash("Add at least 2 options",true); return; }
-  const obj={q:draft.q.trim(),img:draft.img||'',wide:!!draft.wide,roast:(draft.roast||'').trim(),opts:filled.map(o=>o.text.trim()),correct:0};
+  const obj={q:draft.q.trim(),img:draft.img||'',file:draft.file||'',wide:!!draft.wide,roast:(draft.roast||'').trim(),opts:filled.map(o=>o.text.trim()),correct:0};
   if(draftIdx>=0) GAME.questions[draftIdx]=obj; else GAME.questions.push(obj);
-  saveLocal(); flash("Saved ✓"); editor('quiz');
+  saveLocal(); markOwn(); flash("Saved ✓"); editor('quiz');
 }
 
 /* ---- photo input shared ---- */
-function pickPhoto(){ fileTarget='draft'; document.getElementById('filein').click(); }
-function removePhoto(){ captureQ(); draft.img=''; renderQEdit(); }
+function pickPhoto(){ fileTarget='draft'; const fi=document.getElementById('filein'); fi.accept='image/*'; fi.multiple=false; fi.click(); }
+function removePhoto(){ captureQ(); draft.img=''; draft.file=''; renderQEdit(); }
+/* Bulk-upload entry points */
+function bulkAddQuiz(){ fileTarget='quizbulk'; const fi=document.getElementById('filein'); fi.accept='image/*'; fi.multiple=true; fi.click(); }
+function bulkAddRoast(){ fileTarget='roastbulk'; const fi=document.getElementById('filein'); fi.accept='image/*'; fi.multiple=true; fi.click(); }
+function addRoastPhoto(){ bulkAddRoast(); }
 document.getElementById('filein').addEventListener('change', async e=>{
-  const f=e.target.files[0]; e.target.value=''; if(!f) return;
-  if(fileTarget==='import'){ importJSONFile(f); fileTarget=null; return; }
-  if(fileTarget==='roastadd'){ try{ const url=await fileToDataURL(f); const wide=await imgWide(url); (GAME.roastSet=GAME.roastSet||[]).push({img:url,wide}); saveLocal(); renderRoastPhotos(); }catch(err){ flash("Couldn't read that image (HEIC? try a JPG)",true); } fileTarget=null; return; }
-  try{ const url=await fileToDataURL(f); captureQ(); draft.img=url; renderQEdit(); }
+  const files=Array.from(e.target.files||[]); e.target.value=''; const ft=fileTarget; fileTarget=null; const fi=e.target;
+  const done=()=>{ fi.multiple=false; fi.accept='image/*'; };
+  if(!files.length){ done(); return; }
+  if(ft==='import'){ importJSONFile(files[0]); done(); return; }
+  if(ft==='csv'){ importQuizCSV(files[0]); done(); return; }
+  if(ft==='roastadd'||ft==='roastbulk'){ await bulkRoastFiles(files); done(); return; }
+  if(ft==='quizbulk'){ await bulkQuizFiles(files); done(); return; }
+  // single photo into the open question draft
+  try{ const url=await fileToDataURL(files[0]); captureQ(); draft.img=url; draft.file=files[0].name||''; renderQEdit(); }
   catch(err){ flash("Couldn't read that image (HEIC? try a JPG)",true); }
-  fileTarget=null;
+  done();
 });
+/* Read many images into roast set / quiz stubs */
+async function bulkRoastFiles(files){
+  let ok=0,fail=0; GAME.roastSet=GAME.roastSet||[];
+  for(const f of files){ try{ const url=await fileToDataURL(f); const wide=await imgWide(url); GAME.roastSet.push({img:url,wide,file:f.name||''}); ok++; }catch(e){ fail++; } }
+  saveLocal(); if(ok) markOwn(); renderRoastPhotos();
+  flash(ok?`Added ${ok} photo${ok===1?'':'s'}${fail?` · ${fail} skipped (HEIC?)`:''} ✓`:"Couldn't read those images (HEIC? try JPGs)", !ok);
+}
+async function bulkQuizFiles(files){
+  let ok=0,fail=0;
+  for(const f of files){ try{ const url=await fileToDataURL(f); const wide=await imgWide(url); GAME.questions.push({q:'',img:url,file:f.name||'',wide,roast:'',opts:[],correct:0}); ok++; }catch(e){ fail++; } }
+  saveLocal(); if(ok) markOwn(); editor('quiz');
+  flash(ok?`Added ${ok} photo${ok===1?'':'s'}${fail?` · ${fail} skipped`:''} — now download the CSV template to add questions ✓`:"Couldn't read those images (HEIC? try JPGs)", !ok);
+}
 function fileToDataURL(file,maxDim=1000,q=0.74){
   return new Promise((res,rej)=>{ const img=new Image(),url=URL.createObjectURL(file);
     img.onload=()=>{ let w=img.naturalWidth,h=img.naturalHeight,m=Math.max(w,h);
@@ -540,15 +592,85 @@ async function downloadGameFile(){
   if(!shell||shell.indexOf('id="gamedata"')<0){ flash("Open the hosted link to bake the file. Exported a backup instead.",true); exportJSON(); return; }
   const json=JSON.stringify(GAME).replace(/<\//g,'<\\/');
   shell=shell.replace(/(<script type="application\/json" id="gamedata">)[\s\S]*?(<\/script>)/,(m,a,b)=>a+json+b);
-  downloadText(shell,'karanpedia.html','text/html'); flash("Downloaded — re-upload to update everyone ✓");
+  downloadText(shell,slug(GAME.name)+'-partypedia.html','text/html'); flash("Downloaded — re-upload to update everyone ✓");
 }
-function exportJSON(){ saveLocal(); downloadText(JSON.stringify(GAME),'karanpedia-data.json','application/json'); flash("Backup downloaded ✓"); }
+function exportJSON(){ saveLocal(); downloadText(JSON.stringify(GAME),slug(GAME.name)+'-partypedia.json','application/json'); flash("Backup downloaded ✓"); }
 function triggerImport(){ fileTarget='import'; const fi=document.getElementById('filein'); fi.accept='application/json,.json'; fi.click(); setTimeout(()=>fi.accept='image/*',1000); }
 function importJSONFile(f){ const r=new FileReader();
-  r.onload=()=>{ try{ const g=asGame(JSON.parse(r.result)); if(!g.questions) throw 0; GAME=g; saveLocal(); flash("Imported ✓"); editor(); }catch(e){ flash("That didn't look like a Karanpedia backup",true); } };
+  r.onload=()=>{ try{ const g=asGame(JSON.parse(r.result)); if(!g.questions) throw 0; GAME=g; saveLocal(); markOwn(); flash("Imported ✓"); editor(); }catch(e){ flash("That didn't look like a "+APP_NAME+" backup",true); } };
   r.onerror=()=>flash("Couldn't read that file",true); r.readAsText(f); }
 function resetGame(){ if(!confirm('Reset to the original version baked into this file? Your edits on this device will be cleared.'))return;
-  try{ localStorage.removeItem(LS_KEY); }catch(e){} GAME=deep(DEFAULT_GAME); editor(); flash("Reset ✓"); }
+  try{ localStorage.removeItem(LS_KEY); }catch(e){} clearOwn(); GAME=deep(DEFAULT_GAME); editor(); flash("Reset ✓"); }
+
+/* =================== CSV TEMPLATE (party-mode questions) =================== */
+function csvEscape(v){ v=String(v==null?'':v); return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+// Minimal RFC-4180 parser: handles quoted fields, embedded commas/newlines, "" escapes.
+function parseCSV(text){
+  text=String(text||'').replace(/^﻿/,'');
+  const rows=[]; let row=[], field='', i=0, q=false;
+  while(i<text.length){ const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){ field+='"'; i+=2; continue; } q=false; i++; continue; } field+=c; i++; continue; }
+    if(c==='"'){ q=true; i++; continue; }
+    if(c===','){ row.push(field); field=''; i++; continue; }
+    if(c==='\r'){ i++; continue; }
+    if(c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; i++; continue; }
+    field+=c; i++;
+  }
+  if(field.length||row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r=>r.some(c=>String(c).trim()!==''));
+}
+function downloadQuizCSV(){
+  const qs=GAME.questions||[];
+  if(!qs.length){ flash('Bulk-upload some photos first',true); return; }
+  const maxOpt=Math.min(6,Math.max(4,...qs.map(q=>(q.opts||[]).length)));
+  const optCols=letters.slice(0,maxOpt).map(L=>'option_'+L.toLowerCase());
+  const header=['photo','question',...optCols];
+  const rows=qs.map((q,i)=>{ const key=q.file||('photo-'+(i+1)); const opts=q.opts||[];
+    return [key, q.q||'', ...optCols.map((_,j)=>opts[j]||'')]; });
+  const csv=[header,...rows].map(r=>r.map(csvEscape).join(',')).join('\r\n');
+  downloadText(csv, slug(GAME.name)+'-questions.csv', 'text/csv');
+  flash('Template downloaded — fill it in, then upload it back ✓');
+}
+function uploadQuizCSV(){ fileTarget='csv'; const fi=document.getElementById('filein'); fi.accept='.csv,text/csv'; fi.multiple=false; fi.click(); }
+function importQuizCSV(file){
+  const r=new FileReader();
+  r.onload=()=>{ try{
+    const rows=parseCSV(r.result);
+    if(rows.length<2){ flash('That CSV looks empty',true); return; }
+    const head=rows[0].map(h=>String(h).trim().toLowerCase());
+    const findCol=(...names)=>{ for(const n of names){ const idx=head.indexOf(n); if(idx>=0) return idx; } return -1; };
+    const pi=findCol('photo','image','filename','file','key');
+    const qi=findCol('question','q','prompt');
+    if(pi<0||qi<0){ flash('CSV needs a "photo" column and a "question" column',true); return; }
+    const optIdx=[];
+    letters.forEach(Lc=>{ const lc=Lc.toLowerCase(); const idx=findCol('option_'+lc,'option '+lc,'opt_'+lc); if(idx>=0) optIdx.push(idx); });
+    if(!optIdx.length){ for(let k=1;k<=6;k++){ const idx=findCol('option_'+k,'option'+k,'opt'+k); if(idx>=0) optIdx.push(idx); } }
+    // Map each question by its stored filename (order-independent).
+    const byFile={};
+    (GAME.questions||[]).forEach((q,i)=>{ const k=(q.file||'').toLowerCase(); if(k && byFile[k]===undefined) byFile[k]=i; });
+    const noExt=s=>s.replace(/\.[^.]+$/,'');
+    let matched=0, unmatched=0, ready=0; const seen={};
+    for(let ri=1; ri<rows.length; ri++){
+      const row=rows[ri]; const rawKey=String(row[pi]||'').trim(); if(!rawKey) continue;
+      const key=rawKey.toLowerCase(); let qIdx=-1;
+      if(byFile[key]!==undefined && !seen[byFile[key]]) qIdx=byFile[key];
+      if(qIdx<0){ const ne=noExt(key); for(const [k,idx] of Object.entries(byFile)){ if(!seen[idx]&&noExt(k)===ne){ qIdx=idx; break; } } }
+      if(qIdx<0 && /^(photo-?)?\d+$/.test(key)){ const n=parseInt(key.replace(/\D/g,''),10); if(n>=1&&n<=GAME.questions.length && !seen[n-1]) qIdx=n-1; }
+      if(qIdx<0){ unmatched++; continue; }
+      seen[qIdx]=true;
+      const Q=GAME.questions[qIdx];
+      Q.q=String(row[qi]||'').trim();
+      const opts=optIdx.map(ci=>String(row[ci]||'').trim()).filter(Boolean);
+      if(opts.length) Q.opts=opts;
+      Q.correct=0; matched++;
+      if(Q.q && (Q.opts||[]).filter(o=>o&&o.trim()).length>=2) ready++;
+    }
+    saveLocal(); if(matched) markOwn(); editor('quiz');
+    flash(`Mapped ${matched} row${matched===1?'':'s'}${unmatched?` · ${unmatched} didn't match a photo`:''} · ${ready} ready to play`, matched===0);
+  }catch(e){ flash('Could not read that CSV',true); } };
+  r.onerror=()=>flash('Could not read that file',true);
+  r.readAsText(file);
+}
 
 /* =================== LIVE PARTY (Supabase, host-paced) =================== */
 const SB_URL="https://uvxpdwxcukgulfvghkgd.supabase.co";
