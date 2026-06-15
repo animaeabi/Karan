@@ -1202,7 +1202,14 @@ function roastPlayerFinal(){
 }
 
 /* =================== P2P TRANSPORT TEST (WebRTC, Supabase broadcast = signaling only) =================== */
-const ICE_CONF={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+/* Same-wifi parties connect directly (host candidates / STUN). The TURN relays
+   below are a best-effort fallback ONLY for networks that block direct P2P.
+   These are free public relays — they can be rate-limited or go down. For a
+   guaranteed relay, replace TURN_SERVERS with your own free Metered/Twilio key. */
+const TURN_SERVERS=[
+  {urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}
+];
+const ICE_CONF={iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']},...TURN_SERVERS]};
 let P=null;
 function p2pLog(m){ if(!P)return; P.log=P.log||[]; P.log.unshift('['+new Date().toLocaleTimeString()+'] '+m); if(P.log.length>50)P.log.pop(); p2pTestRender(); }
 function cleanupP2P(){ if(!P)return;
