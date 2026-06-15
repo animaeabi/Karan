@@ -401,7 +401,8 @@ function editor(tab){
         <input type="text" id="g_sub" value="${esc(GAME.sub)}" placeholder="One line under the logo"></div>
       <div class="field"><label>Accent colour</label>
         <div class="swatches" id="ed_sw">${Object.keys(THEMES).map(k=>`<button type="button" class="sw${k===(GAME.theme||'mango')?' on':''}" data-t="${k}" title="${THEMES[k].label}" onclick="pickThemeEd('${k}')" style="background:${THEMES[k].a}"></button>`).join('')}</div></div>
-      <button class="cta alt" style="margin-bottom:18px" onclick="saveTitle()">Save details</button>
+      <button class="cta alt" onclick="saveTitle()">Save details</button>
+      <p class="h" style="margin:8px 0 18px;font-size:13px;opacity:.8">💾 Saved on this device only — your friends won't see these edits unless they join your live game.</p>
 
       <div class="tabbar">
         <button class="tab ${isQuiz?'on':''}" onclick="editor('quiz')">Quiz questions (${GAME.questions.length})</button>
@@ -564,8 +565,10 @@ function roomCode(){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(l
 function clientId(){ let c; try{c=localStorage.getItem('kp_cid')||sessionStorage.getItem('kp_cid');}catch(e){} if(!c){c=Math.random().toString(36).slice(2)+Date.now().toString(36);} try{localStorage.setItem('kp_cid',c);}catch(e){} try{sessionStorage.setItem('kp_cid',c);}catch(e){} return c; }
 function joinLink(code){ return location.origin+location.pathname+'#'+(L&&L.net==='p2p'?'pg':'join')+'='+code; }
 function cleanupLive(){ try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){} if(L){ if(L.autoTimer)clearTimeout(L.autoTimer); if(L.advTimer)clearTimeout(L.advTimer); if(L.tick)clearInterval(L.tick); if(L.poll)clearInterval(L.poll); if(L.hostPoll)clearInterval(L.hostPoll); if(L.helloTimer)clearInterval(L.helloTimer);
-  try{ Object.values(L.peers||{}).forEach(p=>{try{p.dc&&p.dc.close();}catch(e){}try{p.pc&&p.pc.close();}catch(e){}}); }catch(e){}
-  try{ if(L.pc)L.pc.close(); }catch(e){} try{ if(L.dc)L.dc.close(); }catch(e){} try{ if(L.sig&&sb)sb.removeChannel(L.sig); }catch(e){} } L=null; }
+  try{ Object.values(L.peers||{}).forEach(p=>{ try{ if(p.dc){p.dc.onclose=null;p.dc.onmessage=null;p.dc.onopen=null;p.dc.close();} }catch(e){} try{ if(p.pc){p.pc.onconnectionstatechange=null;p.pc.onicecandidate=null;p.pc.close();} }catch(e){} }); }catch(e){}
+  try{ if(L.dc){L.dc.onclose=null;L.dc.onmessage=null;L.dc.onopen=null;L.dc.close();} }catch(e){}
+  try{ if(L.pc){L.pc.onconnectionstatechange=null;L.pc.onicecandidate=null;L.pc.ondatachannel=null;L.pc.close();} }catch(e){}
+  try{ if(L.sig&&sb)sb.removeChannel(L.sig); }catch(e){} } L=null; }
 /* ---- session persistence ---- */
 function saveSession(){ try{ if(L&&L.role==='player'&&L.code) localStorage.setItem('kp_live', JSON.stringify({code:L.code,name:L.name||'',ts:Date.now()})); }catch(e){} }
 function loadSession(){ try{ const o=JSON.parse(localStorage.getItem('kp_live')||'null'); if(o&&o.code&&o.ts&&Date.now()-o.ts<6*3600*1000) return o; }catch(e){} return null; }
@@ -618,7 +621,9 @@ async function hostResync(){
     if(L.status==='playing') maybeAutoAdvance();
   }
 }
-function liveFocusResync(){ if(!L||!L.code) return; if(L.role==='player') playerResync(); else if(L.role==='host') hostResync(); }
+function liveFocusResync(){ if(!L||!L.code) return;
+  if(L.net==='p2p'){ if(L.bye)return; if(L.role==='player' && !(L.dc&&L.dc.readyState==='open')) joinP2P(L.code); return; }
+  if(L.role==='player') playerResync(); else if(L.role==='host') hostResync(); }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) liveFocusResync(); });
 addEventListener('online', liveFocusResync);
 addEventListener('focus', liveFocusResync);
@@ -648,7 +653,7 @@ function subscribeQuizHost(s,code){
       p=>{ const r=p.new||p.old; if(!r)return; if(p.eventType==='DELETE')delete L.players[r.id]; else { L.players[r.id]=r; if(L.activeIds&&r.client_id)L.activeIds.add(r.client_id); } renderHost(); maybeAutoAdvance(); })
     .subscribe();
 }
-function hostPlayers(){ return activeFilter(Object.values(L.players)); }
+function hostPlayers(){ if(L&&L.net==='p2p') return Object.values(L.players).filter(p=>p.online!==false); return activeFilter(Object.values(L.players)); }
 async function hostStart(){ if(L&&L.net==='p2p') return hostStartP2P(); const s=await getSB(); L.status='playing'; L.current_q=0;
   await s.from('rooms').update({status:'playing',current_q:0}).eq('code',L.code); renderHost(); }
 async function hostNext(){ if(L&&L.net==='p2p') return pgHostNext(); if(L&&L.autoTimer){ clearTimeout(L.autoTimer); L.autoTimer=null; } const s=await getSB(); const N=liveSet().length;
@@ -762,7 +767,10 @@ function renderRevealSummary(){
       <button class="cta" style="margin-top:18px" onclick="leaveHost()">New game 🔁</button>
     </div>`;
 }
-function leaveHost(){ clearSession(); clearHostSession(); const net=L&&L.net, c=L&&L.code; if(c&&net!=='p2p'){ getSB().then(s=>s.from('rooms').delete().eq('code',c)).catch(()=>{}); } cleanupLive(); history.replaceState(null,'',location.pathname); home(); }
+function leaveHost(){ clearSession(); clearHostSession(); const net=L&&L.net, c=L&&L.code;
+  if(net==='p2p'){ try{ pgBroadcast({t:'bye'}); }catch(e){} clearP2PHost(); }
+  else if(c){ getSB().then(s=>s.from('rooms').delete().eq('code',c)).catch(()=>{}); }
+  cleanupLive(); history.replaceState(null,'',location.pathname); home(); }
 
 /* ---- PLAYER (phone) ---- */
 function joinPrompt(){
@@ -895,7 +903,7 @@ function playerFinal(){
       <div class="sub">Thanks, ${esc(L.name)} — you voted on ${voted} of ${set.length}. The room's verdict is rolling out on the TV. 📺</div>
       <button class="cta alt" style="margin-top:16px" onclick="leavePlayer()">Done</button></div>`;
 }
-function leavePlayer(){ clearSession(); cleanupLive(); history.replaceState(null,'',location.pathname); home(); }
+function leavePlayer(){ clearSession(); clearP2PGuest(); cleanupLive(); history.replaceState(null,'',location.pathname); home(); }
 function liveError(msg){
   app.innerHTML=topbar()+`<div class="waitcard">
     <div class="rank" style="font-size:22px">Can't reach the server</div>
@@ -968,7 +976,7 @@ async function resumeHost(code){
     renderHost();
   }
 }
-function roastPlayers(){ return activeFilter(Object.values(L.players)); }
+function roastPlayers(){ if(L&&L.net==='p2p') return Object.values(L.players).filter(p=>p.online!==false); return activeFilter(Object.values(L.players)); }
 async function loadRoasts(){ const s=await getSB(); const {data}=await s.from('roasts').select('*').eq('room_code',L.code); L.roasts=data||[]; }
 async function loadVotes(){ const s=await getSB(); const {data}=await s.from('roast_votes').select('*').eq('room_code',L.code); L.votes=data||[]; }
 
@@ -1297,6 +1305,14 @@ function pgSendTo(gid,o){ const p=L.peers[gid]; if(p&&p.dc&&p.dc.readyState==='o
 function pgBroadcast(o){ Object.keys(L.peers||{}).forEach(gid=>pgSendTo(gid,o)); }
 function pgSet(){ return GAME.questions.filter(q=>q&&q.img&&(q.opts||[]).filter(o=>o&&o.trim()).length>=2); }
 function pgUniqueName(name,gid){ name=(name||'Player').trim().slice(0,16)||'Player'; const taken=new Set(Object.entries(L.players).filter(([k])=>k!==gid).map(([,p])=>(p.name||'').toLowerCase())); if(!taken.has(name.toLowerCase()))return name; const base=name.slice(0,13); let n=2; while(n<99&&taken.has((base+' '+n).toLowerCase()))n++; return base+' '+n; }
+/* ---- P2P resilience: per-device session persistence (reconnect/resume) ---- */
+const P2P_TTL=6*3600*1000;
+function saveP2PGuest(){ try{ if(L&&L.net==='p2p'&&L.role==='player'&&L.code) localStorage.setItem('kp_pg',JSON.stringify({code:L.code,name:L.name||'',ts:Date.now()})); }catch(e){} }
+function loadP2PGuest(code){ try{ const o=JSON.parse(localStorage.getItem('kp_pg')||'null'); if(o&&o.code===code&&Date.now()-o.ts<P2P_TTL)return o; }catch(e){} return null; }
+function clearP2PGuest(){ try{ localStorage.removeItem('kp_pg'); }catch(e){} }
+function saveP2PHost(){ if(!(L&&L.net==='p2p'&&L.role==='host'))return; try{ localStorage.setItem('kp_pgh',JSON.stringify({code:L.code,mode:L.mode,ts:Date.now(),status:L.status,current_q:L.current_q,phase:L.phase,cur:L.cur,phaseEndsAt:L.phaseEndsAt||0,roasts:L.roasts||[],votes:L.votes||[],players:Object.values(L.players).map(p=>({id:p.id,name:p.name,last_q:p.last_q,picks:p.picks||[]}))})); }catch(e){} }
+function loadP2PHost(code){ try{ const o=JSON.parse(localStorage.getItem('kp_pgh')||'null'); if(o&&o.code===code&&Date.now()-o.ts<P2P_TTL)return o; }catch(e){} return null; }
+function clearP2PHost(){ try{ localStorage.removeItem('kp_pgh'); }catch(e){} }
 
 /* ---- P2P host (TV) ---- */
 async function hostLiveP2P(){
@@ -1310,12 +1326,12 @@ async function hostLiveP2P(){
   L.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
   L.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to==='host') pgHostSignal(payload); });
   L.sig.subscribe();
-  renderHost();
+  renderHost(); saveP2PHost();
 }
 async function pgHostSignal(m){
   const gid=m.from;
   if(m.type==='hello'){
-    if(L.peers[gid]) return;
+    if(L.peers[gid]){ const old=L.peers[gid]; try{ if(old.dc){old.dc.onclose=null;old.dc.onmessage=null;old.dc.close();} }catch(e){} try{ if(old.pc){old.pc.onconnectionstatechange=null;old.pc.close();} }catch(e){} delete L.peers[gid]; }
     const pc=new RTCPeerConnection(ICE_CONF), peer={pc,dc:null,pending:[],ready:false};
     L.peers[gid]=peer;
     pc.onicecandidate=e=>{ if(e.candidate) pgSigSend({to:gid,from:'host',type:'ice',candidate:e.candidate}); };
@@ -1333,42 +1349,50 @@ async function pgHostSignal(m){
     if(peer.ready){ try{await peer.pc.addIceCandidate(m.candidate);}catch(e){} } else peer.pending.push(m.candidate);
   }
 }
-function pgDrop(gid){ const p=L.peers&&L.peers[gid]; if(!p)return; try{p.dc&&p.dc.close();}catch(e){} try{p.pc&&p.pc.close();}catch(e){} delete L.peers[gid]; if(L.players&&L.players[gid])delete L.players[gid]; if(L&&L.role==='host')renderHost(); }
+function pgDrop(gid){ if(!L||L.role!=='host')return; const p=L.peers&&L.peers[gid]; if(p){ try{p.dc&&p.dc.close();}catch(e){} try{p.pc&&p.pc.close();}catch(e){} delete L.peers[gid]; }
+  if(L.players&&L.players[gid]) L.players[gid].online=false;
+  if(L.mode==='roast'){ renderRoastHost(); if(L.phase==='writing')maybeAdvanceWritingP2P(); else if(L.phase==='voting')maybeAdvanceVotingP2P(); }
+  else { renderHost(); pgMaybeAutoAdvance(); }
+  saveP2PHost(); }
 function pgHostMsg(gid,o){
   if(!L||L.role!=='host')return;
   if(o.t==='join'){
-    const name=pgUniqueName(o.name,gid);
-    L.players[gid]={id:gid,client_id:gid,name,last_q:-1,picks:[]};
-    pgSendTo(gid,{t:'joined',pid:gid,name});
-    if(L.mode==='roast'){ pgSendTo(gid,pgRoastRoom()); renderRoastHost(); }
-    else { pgSendTo(gid,pgRoom()); renderHost(); }
+    const exists=L.players[gid];
+    if(exists){ exists.online=true; if(o.name) exists.name=pgUniqueName(o.name,gid); }
+    else { L.players[gid]={id:gid,client_id:gid,name:pgUniqueName(o.name,gid),last_q:-1,picks:[],online:true}; }
+    const p=L.players[gid], back={t:'joined',pid:gid,name:p.name};
+    if(L.mode==='roast'){ back.subs={}; L.roasts.filter(r=>r.author_id===gid).forEach(r=>back.subs[r.photo_idx]=true); back.voted={}; L.votes.filter(v=>v.voter_id===gid).forEach(v=>back.voted[v.photo_idx]=true); }
+    else { back.picks=p.picks||[]; }
+    pgSendTo(gid,back);
+    if(L.mode==='roast'){ pgSendTo(gid,pgRoastRoom()); renderRoastHost(); } else { pgSendTo(gid,pgRoom()); renderHost(); }
+    saveP2PHost();
   } else if(o.t==='answer'){
-    const p=L.players[gid]; if(!p)return;
+    const p=L.players[gid]; if(!p)return; p.online=true;
     if(p.picks[o.qi]==null){ p.picks[o.qi]=o.opt; p.last_q=Math.max(p.last_q|0,o.qi|0); }
-    renderHost(); pgMaybeAutoAdvance();
+    renderHost(); pgMaybeAutoAdvance(); saveP2PHost();
   } else if(o.t==='roast'){
-    if(L.mode!=='roast')return; const p=L.players[gid]; if(!p)return;
+    if(L.mode!=='roast')return; const p=L.players[gid]; if(!p)return; p.online=true;
     if(!L.roasts.some(r=>r.author_id===gid&&r.photo_idx===o.cur)) L.roasts.push({id:gid+'_'+o.cur,photo_idx:o.cur|0,author_id:gid,author_name:p.name,text:(o.text||'').slice(0,140)});
-    renderRoastHost(); maybeAdvanceWritingP2P();
+    renderRoastHost(); maybeAdvanceWritingP2P(); saveP2PHost();
   } else if(o.t==='vote'){
-    if(L.mode!=='roast')return; const p=L.players[gid]; if(!p)return;
+    if(L.mode!=='roast')return; const p=L.players[gid]; if(!p)return; p.online=true;
     if(!L.votes.some(v=>v.voter_id===gid&&v.photo_idx===o.cur)) L.votes.push({id:gid+'_v'+o.cur,photo_idx:o.cur|0,roast_id:o.roastId,voter_id:gid});
-    renderRoastHost(); maybeAdvanceVotingP2P();
+    renderRoastHost(); maybeAdvanceVotingP2P(); saveP2PHost();
   }
 }
 function pgRoom(){ const set=pgSet(); const Q=(L.status==='playing'&&L.current_q>=0)?set[L.current_q]:null;
   return {t:'room',status:L.status,current_q:L.current_q,total:set.length,q:Q?{text:Q.q,opts:(Q.opts||[]).filter(o=>o&&o.trim())}:null}; }
-function hostStartP2P(){ L.status='playing'; L.current_q=0; pgBroadcast(pgRoom()); renderHost(); }
+function hostStartP2P(){ L.status='playing'; L.current_q=0; pgBroadcast(pgRoom()); renderHost(); saveP2PHost(); }
 function pgHostNext(){ if(L.autoTimer){clearTimeout(L.autoTimer);L.autoTimer=null;} const N=liveSet().length;
   if(L.current_q<N-1){ L.current_q++; } else { L.status='ended'; L.rIdx=0; }
-  pgBroadcast(pgRoom()); renderHost(); }
+  pgBroadcast(pgRoom()); renderHost(); saveP2PHost(); }
 function pgMaybeAutoAdvance(){ if(!L||L.role!=='host'||L.net!=='p2p'||L.status!=='playing')return;
-  const ppl=Object.values(L.players), N=liveSet().length;
+  const ppl=hostPlayers(), N=liveSet().length;
   if(ppl.length<1)return; if(L.current_q>=N-1)return;
   if(!ppl.every(p=>(p.last_q|0)>=L.current_q))return; if(L.autoTimer)return;
   const at=L.current_q;
   L.autoTimer=setTimeout(()=>{ L.autoTimer=null; if(!L||L.status!=='playing'||L.current_q!==at)return;
-    const now=Object.values(L.players); if(now.length>=1&&now.every(p=>(p.last_q|0)>=at)) pgHostNext(); },1600); }
+    const now=hostPlayers(); if(now.length>=1&&now.every(p=>(p.last_q|0)>=at)) pgHostNext(); },1600); }
 
 /* ---- P2P roast battle (host) ---- */
 async function roastLiveP2P(){
@@ -1382,7 +1406,7 @@ async function roastLiveP2P(){
   L.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
   L.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to==='host') pgHostSignal(payload); });
   L.sig.subscribe();
-  renderRoastHost();
+  renderRoastHost(); saveP2PHost();
 }
 function roastStartP2P(){ roastGotoP2P('writing',0); }
 function roastGotoP2P(phase,idx){
@@ -1392,6 +1416,7 @@ function roastGotoP2P(phase,idx){
   pgBroadcast(pgRoastRoom());
   renderRoastHost();
   if(phase==='writing') startTick();
+  saveP2PHost();
 }
 function advanceWritingP2P(){ if(!L||L.phase!=='writing')return; const key='w'+L.cur; if(L._lastAdv===key)return; L._lastAdv=key;
   const N=roastSet().length; if(L.cur<N-1) roastGotoP2P('writing',L.cur+1); else roastGotoP2P('voting',0); }
@@ -1412,11 +1437,13 @@ function pgRoastRoom(){ const set=roastSet(); const phase=L.phase||'lobby', cur=
 
 /* ---- P2P guest (phone) ---- */
 async function joinP2P(code){
+  const reconnect=!!(L&&L.net==='p2p'&&L.role==='player'&&L.code===code);
+  const saved=loadP2PGuest(code);
   cleanupLive(); cleanupP2P();
-  app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Connecting to ${esc(code)}…</div></div>`;
+  app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">${reconnect?'Reconnecting':'Connecting'} to ${esc(code)}…</div></div>`;
   let s; try{ s=await getSB(); }catch(e){ return liveError(); }
-  const gid=(clientId().slice(0,6)+Math.random().toString(36).slice(2,5));
-  L={role:'player',net:'p2p',mode:'quiz',code,gid,pc:null,dc:null,pending:[],ready:false,name:null,picks:[],room:null,rroom:null,subs:{},voted:{}};
+  const gid=clientId();
+  L={role:'player',net:'p2p',mode:'quiz',code,gid,pc:null,dc:null,pending:[],ready:false,name:(saved?saved.name:null),picks:[],room:null,rroom:null,subs:{},voted:{},bye:false};
   history.replaceState(null,'','#pg='+code);
   L.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
   L.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to===gid) pgGuestSignal(payload); });
@@ -1439,14 +1466,17 @@ async function pgGuestSignal(m){
   }
 }
 function pgSend(o){ if(L&&L.dc&&L.dc.readyState==='open'){ try{L.dc.send(JSON.stringify(o));}catch(e){} } }
-function pgGuestReady(){ if(L&&L.helloTimer){clearInterval(L.helloTimer);L.helloTimer=null;} if(!L.name) renderNameEntry(); else { pgSend({t:'join',name:L.name}); renderPlayerWait(); } }
+function pgGuestReady(){ if(L&&L.helloTimer){clearInterval(L.helloTimer);L.helloTimer=null;}
+  if(!L.name){ renderNameEntry(); return; }
+  saveP2PGuest(); pgSend({t:'join',name:L.name}); renderPlayerWait(); }
 function pgGuestMsg(o){
   if(!L||L.role!=='player')return;
-  if(o.t==='joined'){ L.pid=o.pid; L.name=o.name; }
+  if(o.t==='joined'){ L.pid=o.pid; L.name=o.name; if(Array.isArray(o.picks))L.picks=o.picks; if(o.subs)L.subs=o.subs; if(o.voted)L.voted=o.voted; saveP2PGuest(); }
   else if(o.t==='room'){ L.mode='quiz'; L.room={status:o.status,current_q:o.current_q,total:o.total}; L.q=o.q; pgGuestRender(); }
   else if(o.t==='rroom'){ L.mode='roast'; if(o.phase==='writing') L.guestEndsAt=Date.now()+(o.endsIn||0); L.rroom={phase:o.phase,cur:o.cur,total:o.total,roasts:o.roasts}; pgRoastGuestRender(); }
+  else if(o.t==='bye'){ L.bye=true; clearP2PGuest(); pgByeScreen(); }
 }
-function submitNameP2P(){ const el=document.getElementById('myname'); const name=(el.value||'').trim().slice(0,16); if(!name){ flash("Add a name first",true); return; } L.name=name; pgSend({t:'join',name}); renderPlayerWait(); }
+function submitNameP2P(){ const el=document.getElementById('myname'); const name=(el.value||'').trim().slice(0,16); if(!name){ flash("Add a name first",true); return; } L.name=name; saveP2PGuest(); pgSend({t:'join',name}); renderPlayerWait(); }
 function pgGuestRender(){
   if(!L||!L.room){ renderPlayerWait(); return; }
   const st=L.room.status;
@@ -1545,7 +1575,27 @@ function pgRoastWaitMsg(title,sub,cur){
       <div class="sub">${esc(sub)}</div>
       <div class="conn" style="margin-top:14px">Photo ${(cur|0)+1} of ${L.rroom?L.rroom.total:'?'} · room ${esc(L.code)}</div></div>`;
 }
-function pgGuestLost(){ if(!L)return; app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="rank" style="font-size:22px">Lost connection to host</div><div class="sub" style="color:var(--muted);margin:10px 0 18px">The host may have closed the room or left wifi range.</div><button class="cta" onclick="home()">Home</button></div>`; }
+function pgGuestLost(){ if(!L||L.role!=='player'||L.bye)return;
+  if(L._reconnecting)return; L._reconnecting=true; const code=L.code;
+  clearTick();
+  app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Reconnecting…</div><div class="sub" style="color:var(--muted);margin-top:8px">Hang tight — getting you back into the game.</div><div class="conn">room ${esc(code)}</div></div>`;
+  setTimeout(()=>{ if(L&&L.code===code&&!L.bye&&!(L.dc&&L.dc.readyState==='open')) joinP2P(code); },1200);
+}
+function pgByeScreen(){ clearTick(); app.innerHTML=topbar()+`<div class="waitcard"><div class="big" style="font-size:44px">🏁</div><div class="rank" style="font-size:22px">Game over</div><div class="sub" style="color:var(--muted);margin:8px 0 18px">The host ended the game. Thanks for playing!</div><button class="cta" onclick="home()">Home</button></div>`; }
+async function resumeHostP2P(code){
+  const snap=loadP2PHost(code); if(!snap) return joinP2P(code);
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveHost()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Reconnecting your room ${esc(code)}…</div></div>`;
+  let s; try{ s=await getSB(); }catch(e){ return liveError(); }
+  L={role:'host',net:'p2p',mode:snap.mode,code,peers:{},players:{},roasts:snap.roasts||[],votes:snap.votes||[],status:snap.status,current_q:snap.current_q,phase:snap.phase,cur:snap.cur,phaseEndsAt:snap.phaseEndsAt||0};
+  (snap.players||[]).forEach(p=>{ L.players[p.id]={id:p.id,client_id:p.id,name:p.name,last_q:(p.last_q==null?-1:p.last_q),picks:p.picks||[],online:false}; });
+  history.replaceState(null,'','#pg='+code);
+  L.sig=s.channel('rtc-'+code,{config:{broadcast:{self:false}}});
+  L.sig.on('broadcast',{event:'sig'},({payload})=>{ if(payload&&payload.to==='host') pgHostSignal(payload); });
+  L.sig.subscribe();
+  if(L.mode==='roast'&&L.phase==='writing'){ L.advTimer=setTimeout(()=>advanceWritingP2P(),Math.max(0,(L.phaseEndsAt||0)-Date.now())); }
+  if(L.mode==='roast'){ renderRoastHost(); if(L.phase==='writing') startTick(); } else { renderHost(); }
+}
 
 /* =================== TOAST + CONFETTI =================== */
 let toastT;
@@ -1564,7 +1614,7 @@ function loop(){ ctx.clearRect(0,0,cv.width,cv.height);
 /* =================== ROUTER =================== */
 function route(){ const h=location.hash||''; let m;
   if((m=h.match(/p2p=([A-Za-z0-9]{4})/))){ p2pTestJoin(m[1]); return; }
-  if((m=h.match(/pg=([A-Za-z0-9]{4})/))){ joinP2P(m[1]); return; }
+  if((m=h.match(/pg=([A-Za-z0-9]{4})/))){ const c=m[1]; if(loadP2PHost(c)) resumeHostP2P(c); else joinP2P(c); return; }
   if((m=h.match(/join=([A-Za-z0-9]{4})/))){ joinLive(m[1]); return; }
   if((m=h.match(/host=([A-Za-z0-9]{4})/))){ resumeHost(m[1]); return; }
   const sess=loadSession();
