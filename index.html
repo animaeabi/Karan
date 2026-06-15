@@ -391,9 +391,9 @@ function home(){
     : '';
   app.innerHTML = demoBanner + hero + `
     <div class="modes">
-      <button class="mode m4" onclick="hostLive()"><span class="ico">📺</span>
+      <button class="mode m4" onclick="hostLiveP2P()"><span class="ico">📺</span>
         <span><span class="mt">Party Mode</span><span class="ms">Photo quiz · host on the TV · everyone joins by QR</span></span></button>
-      <button class="mode m2" onclick="roastLive()"><span class="ico">😈</span>
+      <button class="mode m2" onclick="roastLiveP2P()"><span class="ico">😈</span>
         <span><span class="mt">Roast Battle</span><span class="ms">Host on TV · everyone writes roasts · vote the best</span></span></button>
     </div>
     ${own
@@ -402,10 +402,8 @@ function home(){
       : `<button class="editbtn" onclick="newGame()">✨ Make your own game</button>
          <button class="editbtn" onclick="editor()" style="margin-top:8px">📥 Bulk-upload photos &amp; add questions</button>
          <button class="editbtn" onclick="loadDemo()" style="margin-top:8px">👀 Try the demo game</button>`}
-    <button class="editbtn" onclick="hostLiveP2P()" style="margin-top:8px">🎮 Party Mode — same room, no internet (beta)</button>
-    <button class="editbtn" onclick="roastLiveP2P()" style="margin-top:8px">😈 Roast Battle — same room, no internet (beta)</button>
     <div class="home-foot"><button class="linklike" onclick="joinPrompt()">On your phone? Join a live game →</button></div>
-    <div class="home-foot"><button class="linklike" onclick="p2pTestHost()" style="opacity:.7">🔌 Test local P2P connection (beta)</button></div>
+    <div class="home-foot"><button class="linklike" onclick="p2pTestHost()" style="opacity:.7">🔌 Test local connection</button></div>
     <div class="home-foot">${own&&GAME.name?('Made for '+esc(GAME.name)+' • '):APP_NAME+' • '}${new Date().getFullYear()}</div>
     <footer class="credit"><b>Party Mode</b> needs internet for everyone and works best on a TV/laptop the group can see.</footer>`;
 }
@@ -919,27 +917,11 @@ function joinPrompt(){
       </div></section>`;
   setTimeout(()=>{const e=document.getElementById('jcode');if(e)e.focus();},50);
 }
+// Manual code entry joins the same-room P2P game (QR join routes here too).
 async function joinLive(raw){
   const code=(raw||'').trim().toUpperCase();
   if(code.length<4){ flash("Enter the 4-letter code",true); return; }
-  cleanupLive();
-  app.innerHTML=topbar()+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Joining ${esc(code)}…</div></div>`;
-  let s; try{ s=await getSB(); }catch(e){ return liveError(); }
-  const {data:room}=await s.from('rooms').select('*').eq('code',code).maybeSingle();
-  if(!room){ clearSession(); app.innerHTML=topbar()+`<div class="waitcard"><div class="rank" style="font-size:22px">Room ${esc(code)} not found</div><div class="sub" style="color:var(--muted);margin:8px 0 18px">Double-check the code on the TV.</div><button class="cta" onclick="joinPrompt()">Try again</button></div>`; return; }
-  L={role:'player',mode:(room.mode||'quiz'),code,room,pid:null,name:null,curQ:-1,picks:[],subs:{},voted:{},ph:null,pcur:-2};
-  let existing=null;
-  try{ const {data:rows}=await s.from('players').select('*').eq('room_code',code).eq('client_id',clientId()).order('joined_at',{ascending:true}).limit(1); existing=(rows&&rows[0])||null; }catch(e){}
-  if(existing){
-    L.pid=existing.id; L.name=existing.name; L.picks=existing.picks||[];
-    if(L.mode==='roast'){
-      try{ const {data:rr}=await s.from('roasts').select('photo_idx').eq('room_code',code).eq('author_id',existing.id); (rr||[]).forEach(r=>{L.subs[r.photo_idx]=true;}); }catch(e){}
-      try{ const {data:vv}=await s.from('roast_votes').select('photo_idx').eq('room_code',code).eq('voter_id',existing.id); (vv||[]).forEach(v=>{L.voted[v.photo_idx]=true;}); }catch(e){}
-    }
-    subscribeAsPlayer(s); saveSession(); onRoomUpdate(true);
-  } else {
-    renderNameEntry();
-  }
+  joinP2P(code);
 }
 function renderNameEntry(){
   app.innerHTML=topbar('leavePlayer()')+`
@@ -1786,8 +1768,6 @@ function route(){ const h=location.hash||''; let m;
   if((m=h.match(/pg=([A-Za-z0-9]{4})/))){ const c=m[1]; if(loadP2PHost(c)) resumeHostP2P(c); else joinP2P(c); return; }
   if((m=h.match(/join=([A-Za-z0-9]{4})/))){ joinLive(m[1]); return; }
   if((m=h.match(/host=([A-Za-z0-9]{4})/))){ resumeHost(m[1]); return; }
-  const sess=loadSession();
-  if(sess&&sess.code){ joinLive(sess.code); return; }
   home(); }
 route();
 </script>
