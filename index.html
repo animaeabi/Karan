@@ -462,7 +462,6 @@ function renderRoastPhotos(){
   if(!arr.length){ wrap.innerHTML=`<div class="qrow"><div class="meta"><div class="t" style="color:var(--muted)">No roast photos yet. Tap “Add” below.</div></div></div>`; return; }
   wrap.innerHTML=`<div class="pgrid">${arr.map((p,i)=>`<div class="pcell"><img src="${p.img}" alt=""><span class="pnum">${i+1}</span><button class="pdel" onclick="delRoastPhoto(${i})">🗑</button></div>`).join('')}</div>`;
 }
-function addRoastPhoto(){ fileTarget='roastadd'; const fi=document.getElementById('filein'); fi.accept='image/*'; fi.click(); }
 function delRoastPhoto(i){ if(!confirm('Remove this photo?'))return; GAME.roastSet.splice(i,1); saveLocal(); renderRoastPhotos(); }
 function imgWide(url){ return new Promise(res=>{ const im=new Image(); im.onload=()=>res(im.naturalWidth>im.naturalHeight); im.onerror=()=>res(false); im.src=url; }); }
 function curList(){ return GAME.questions; }
