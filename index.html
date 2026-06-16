@@ -402,6 +402,8 @@ function home(){
       : `<button class="editbtn" onclick="newGame()">✨ Make your own game</button>
          <button class="editbtn" onclick="editor()" style="margin-top:8px">📥 Bulk-upload photos &amp; add questions</button>
          <button class="editbtn" onclick="loadDemo()" style="margin-top:8px">👀 Try the demo game</button>`}
+    <button class="editbtn" onclick="hostLiveCF()" style="margin-top:8px">🧪 Party Mode — Cloudflare (beta)</button>
+    <button class="editbtn" onclick="roastLiveCF()" style="margin-top:8px">🧪 Roast Battle — Cloudflare (beta)</button>
     <div class="home-foot"><button class="linklike" onclick="joinPrompt()">On your phone? Join a live game →</button></div>
     <div class="home-foot"><button class="linklike" onclick="p2pTestHost()" style="opacity:.7">🔌 Test local connection</button></div>
     <div class="home-foot">${own&&GAME.name?('Made for '+esc(GAME.name)+' • '):APP_NAME+' • '}${new Date().getFullYear()}</div>
@@ -694,12 +696,12 @@ async function makeQR(text,el){ try{ const Q=(await import('https://esm.sh/qrcod
   }catch(e){ el.innerHTML=`<div style="color:#220E36;font-weight:700;padding:30px;font-size:13px">Use the code above</div>`; } }
 function roomCode(){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<4;i++)s+=a[Math.floor(Math.random()*a.length)]; return s; }
 function clientId(){ let c; try{c=localStorage.getItem('kp_cid')||sessionStorage.getItem('kp_cid');}catch(e){} if(!c){c=Math.random().toString(36).slice(2)+Date.now().toString(36);} try{localStorage.setItem('kp_cid',c);}catch(e){} try{sessionStorage.setItem('kp_cid',c);}catch(e){} return c; }
-function joinLink(code){ return location.origin+location.pathname+'#'+(L&&L.net==='p2p'?'pg':'join')+'='+code; }
+function joinLink(code){ return location.origin+location.pathname+'#'+(L&&L.cf?'cf':(L&&L.net==='p2p'?'pg':'join'))+'='+code; }
 function cleanupLive(){ try{ if(liveChan&&sb){sb.removeChannel(liveChan);liveChan=null;} }catch(e){} if(L){ if(L.autoTimer)clearTimeout(L.autoTimer); if(L.advTimer)clearTimeout(L.advTimer); if(L.tick)clearInterval(L.tick); if(L.poll)clearInterval(L.poll); if(L.hostPoll)clearInterval(L.hostPoll); if(L.helloTimer)clearInterval(L.helloTimer);
   try{ Object.values(L.peers||{}).forEach(p=>{ try{ if(p.dc){p.dc.onclose=null;p.dc.onmessage=null;p.dc.onopen=null;p.dc.close();} }catch(e){} try{ if(p.pc){p.pc.onconnectionstatechange=null;p.pc.onicecandidate=null;p.pc.close();} }catch(e){} }); }catch(e){}
   try{ if(L.dc){L.dc.onclose=null;L.dc.onmessage=null;L.dc.onopen=null;L.dc.close();} }catch(e){}
   try{ if(L.pc){L.pc.onconnectionstatechange=null;L.pc.onicecandidate=null;L.pc.ondatachannel=null;L.pc.close();} }catch(e){}
-  try{ if(L.sig&&sb)sb.removeChannel(L.sig); }catch(e){} } L=null; }
+  try{ if(L.sig&&sb)sb.removeChannel(L.sig); }catch(e){} try{ if(L.ws){ L.ws.onclose=null; L.ws.onmessage=null; L.ws.onerror=null; L.ws.close(); } }catch(e){} } L=null; }
 /* ---- session persistence ---- */
 function saveSession(){ try{ if(L&&L.role==='player'&&L.code) localStorage.setItem('kp_live', JSON.stringify({code:L.code,name:L.name||'',ts:Date.now()})); }catch(e){} }
 function loadSession(){ try{ const o=JSON.parse(localStorage.getItem('kp_live')||'null'); if(o&&o.code&&o.ts&&Date.now()-o.ts<6*3600*1000) return o; }catch(e){} return null; }
@@ -753,7 +755,7 @@ async function hostResync(){
   }
 }
 function liveFocusResync(){ if(!L||!L.code) return;
-  if(L.net==='p2p'){ if(L.bye)return; if(L.role==='player' && !(L.dc&&L.dc.readyState==='open')) joinP2P(L.code); return; }
+  if(L.net==='p2p'){ if(L.bye)return; if(L.role==='player' && !(L.dc&&L.dc.readyState==='open')) (L.cf?joinCF:joinP2P)(L.code); return; }
   if(L.role==='player') playerResync(); else if(L.role==='host') hostResync(); }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) liveFocusResync(); });
 addEventListener('online', liveFocusResync);
@@ -1424,7 +1426,7 @@ function p2pTestRender(){ if(!P)return;
 function leaveP2P(){ cleanupP2P(); history.replaceState(null,'',location.pathname); home(); }
 
 /* =================== P2P GAME — Stage 2b (host-authoritative over WebRTC) =================== */
-function pgSigSend(p){ try{ L.sig.send({type:'broadcast',event:'sig',payload:p}); }catch(e){} }
+function pgSigSend(p){ try{ if(L&&L.ws){ if(L.ws.readyState===1) L.ws.send(JSON.stringify(p)); return; } L.sig.send({type:'broadcast',event:'sig',payload:p}); }catch(e){} }
 function pgSendTo(gid,o){ const p=L.peers[gid]; if(p&&p.dc&&p.dc.readyState==='open'){ try{p.dc.send(JSON.stringify(o));}catch(e){} } }
 function pgBroadcast(o){ Object.keys(L.peers||{}).forEach(gid=>pgSendTo(gid,o)); }
 function pgSet(){ return GAME.questions.filter(q=>q&&q.img&&(q.opts||[]).filter(o=>o&&o.trim()).length>=2); }
@@ -1434,9 +1436,96 @@ const P2P_TTL=6*3600*1000;
 function saveP2PGuest(){ try{ if(L&&L.net==='p2p'&&L.role==='player'&&L.code) localStorage.setItem('kp_pg',JSON.stringify({code:L.code,name:L.name||'',ts:Date.now()})); }catch(e){} }
 function loadP2PGuest(code){ try{ const o=JSON.parse(localStorage.getItem('kp_pg')||'null'); if(o&&o.code===code&&Date.now()-o.ts<P2P_TTL)return o; }catch(e){} return null; }
 function clearP2PGuest(){ try{ localStorage.removeItem('kp_pg'); }catch(e){} }
-function saveP2PHost(){ if(!(L&&L.net==='p2p'&&L.role==='host'))return; try{ localStorage.setItem('kp_pgh',JSON.stringify({code:L.code,mode:L.mode,ts:Date.now(),display:L.display||'cast',status:L.status,current_q:L.current_q,phase:L.phase,cur:L.cur,phaseEndsAt:L.phaseEndsAt||0,roasts:L.roasts||[],votes:L.votes||[],players:Object.values(L.players).map(p=>({id:p.id,name:p.name,last_q:p.last_q,picks:p.picks||[]}))})); }catch(e){} }
+function saveP2PHost(){ if(!(L&&L.net==='p2p'&&L.role==='host'))return; try{ localStorage.setItem('kp_pgh',JSON.stringify({code:L.code,mode:L.mode,kind:L.cf?'cf':'sb',ts:Date.now(),display:L.display||'cast',status:L.status,current_q:L.current_q,phase:L.phase,cur:L.cur,phaseEndsAt:L.phaseEndsAt||0,roasts:L.roasts||[],votes:L.votes||[],players:Object.values(L.players).map(p=>({id:p.id,name:p.name,last_q:p.last_q,picks:p.picks||[]}))})); }catch(e){} }
 function loadP2PHost(code){ try{ const o=JSON.parse(localStorage.getItem('kp_pgh')||'null'); if(o&&o.code===code&&Date.now()-o.ts<P2P_TTL)return o; }catch(e){} return null; }
 function clearP2PHost(){ try{ localStorage.removeItem('kp_pgh'); }catch(e){} }
+
+/* ===================================================================
+   CLOUDFLARE PATH (beta) — Path A
+   Signaling via a Cloudflare Worker + Durable Object (WebSocket relay),
+   TURN via Cloudflare Realtime. Shares ALL game logic with the P2P path;
+   only the transport (L.ws) and ICE (L.ice) differ. Set CF_WORKER below to
+   your deployed Worker URL — see cloudflare/README.md.
+   =================================================================== */
+const CF_WORKER='';  // e.g. 'https://partypedia-signaling.<your-subdomain>.workers.dev'
+function cfWsURL(code){ return CF_WORKER.replace(/^http/,'ws').replace(/\/$/,'')+'/ws?room='+encodeURIComponent(code); }
+async function cfICE(){
+  const base={iceServers:[{urls:'stun:stun.cloudflare.com:3478'}]};
+  if(!CF_WORKER) return base;
+  try{ const r=await fetch(CF_WORKER.replace(/\/$/,'')+'/turn',{cache:'no-store'});
+    const j=await r.json(); const s=j&&j.iceServers; if(s) base.iceServers=base.iceServers.concat(Array.isArray(s)?s:[s]); }catch(e){}
+  return base;
+}
+function cfNotConfigured(){ app.innerHTML=topbar()+`<section class="setup"><h2>Cloudflare mode isn't set up yet 🧪</h2>
+  <p class="h">This beta needs the signaling Worker deployed. Follow <b>cloudflare/README.md</b>, then paste your Worker URL into <code>CF_WORKER</code> near the top of the script in index.html.</p>
+  <button class="cta" onclick="home()">Back</button></section>`; }
+function cfError(){ app.innerHTML=topbar()+`<section class="setup"><h2>Couldn't reach the Cloudflare room</h2>
+  <p class="h">The signaling Worker didn't respond. Check it's deployed and that <code>CF_WORKER</code> is correct.</p>
+  <button class="cta" onclick="home()">Back</button></section>`; }
+// Opens L.ws and routes incoming signaling to the right handler. Host auto-reopens on drop.
+function cfConnect(code,role){
+  return new Promise((resolve,reject)=>{
+    let ws; try{ ws=new WebSocket(cfWsURL(code)); }catch(e){ reject(e); return; }
+    L.ws=ws;
+    ws.onmessage=e=>{ let p; try{ p=JSON.parse(e.data); }catch(_){ return; }
+      if(role==='host'){ if(p&&p.to==='host') pgHostSignal(p); }
+      else if(p&&p.to===L.gid) pgGuestSignal(p); };
+    ws.onopen=()=>{ if(role==='guest' && !(L.dc&&L.dc.readyState==='open')) pgSigSend({to:'host',from:L.gid,type:'hello'}); resolve(); };
+    ws.onerror=()=>{};
+    if(role==='host'){ ws.onclose=()=>{ if(L&&L.cf&&L.role==='host'&&L.code===code) setTimeout(()=>{ if(L&&L.cf&&L.role==='host'&&L.code===code&&(!L.ws||L.ws.readyState>1)) cfConnect(code,'host').catch(()=>{}); },1500); }; }
+    setTimeout(()=>{ if(ws.readyState!==1) reject(new Error('cf-timeout')); },9000);
+  });
+}
+async function hostLiveCF(){
+  if(pgSet().length<1){ flash("Add a photo + 2 options in Edit first",true); editor('quiz'); return; }
+  if(!CF_WORKER) return cfNotConfigured();
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveHost()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Starting a Cloudflare room…</div></div>`;
+  const code=roomCode();
+  L={role:'host',net:'p2p',cf:true,mode:'quiz',code,status:'lobby',current_q:-1,players:{},peers:{},display:'cast'};
+  L.ice=await cfICE();
+  history.replaceState(null,'','#cf='+code);
+  try{ await cfConnect(code,'host'); }catch(e){ return cfError(); }
+  renderHost(); saveP2PHost();
+}
+async function roastLiveCF(){
+  if(((GAME.roastSet||[]).filter(p=>p&&p.img)).length<1){ flash("Add roast photos in Edit first",true); editor('roastset'); return; }
+  if(!CF_WORKER) return cfNotConfigured();
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveHost()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Starting a Cloudflare roast room…</div></div>`;
+  const code=roomCode();
+  L={role:'host',net:'p2p',cf:true,mode:'roast',code,phase:'lobby',cur:-1,players:{},peers:{},roasts:[],votes:[],phaseEndsAt:0,display:'cast'};
+  L.ice=await cfICE();
+  history.replaceState(null,'','#cf='+code);
+  try{ await cfConnect(code,'host'); }catch(e){ return cfError(); }
+  renderRoastHost(); saveP2PHost();
+}
+async function joinCF(code){
+  if(!CF_WORKER) return cfNotConfigured();
+  const reconnect=!!(L&&L.cf&&L.role==='player'&&L.code===code);
+  const saved=loadP2PGuest(code);
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">${reconnect?'Reconnecting':'Connecting'} to ${esc(code)}…</div></div>`;
+  const gid=clientId();
+  L={role:'player',net:'p2p',cf:true,mode:'quiz',code,gid,pc:null,dc:null,pending:[],ready:false,name:(saved?saved.name:null),picks:[],room:null,rroom:null,subs:{},voted:{},bye:false,display:'cast',photos:{},_pbuf:{}};
+  L.ice=await cfICE();
+  history.replaceState(null,'','#cf='+code);
+  try{ await cfConnect(code,'guest'); }catch(e){ return cfError(); }
+  L.helloTimer=setInterval(()=>{ if(L&&L.cf&&L.role==='player'&&!(L.dc&&L.dc.readyState==='open')){ if(L.ws&&L.ws.readyState===1) pgSigSend({to:'host',from:L.gid,type:'hello'}); } else if(L&&L.helloTimer){ clearInterval(L.helloTimer); L.helloTimer=null; } },1800);
+}
+async function resumeHostCF(code){
+  const snap=loadP2PHost(code); if(!snap||snap.kind!=='cf') return joinCF(code);
+  if(!CF_WORKER) return cfNotConfigured();
+  cleanupLive(); cleanupP2P();
+  app.innerHTML=topbar('leaveHost()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Reconnecting your room ${esc(code)}…</div></div>`;
+  L={role:'host',net:'p2p',cf:true,mode:snap.mode,code,peers:{},players:{},roasts:snap.roasts||[],votes:snap.votes||[],status:snap.status,current_q:snap.current_q,phase:snap.phase,cur:snap.cur,phaseEndsAt:snap.phaseEndsAt||0,display:snap.display||'cast'};
+  (snap.players||[]).forEach(p=>{ L.players[p.id]={id:p.id,client_id:p.id,name:p.name,last_q:(p.last_q==null?-1:p.last_q),picks:p.picks||[],online:false}; });
+  L.ice=await cfICE();
+  history.replaceState(null,'','#cf='+code);
+  try{ await cfConnect(code,'host'); }catch(e){ return cfError(); }
+  if(L.mode==='roast'&&L.phase==='writing'){ L.advTimer=setTimeout(()=>advanceWritingP2P(),Math.max(0,(L.phaseEndsAt||0)-Date.now())); }
+  if(L.mode==='roast'){ renderRoastHost(); if(L.phase==='writing') startTick(); } else { renderHost(); }
+}
 
 /* ---- P2P host (TV) ---- */
 async function hostLiveP2P(){
@@ -1456,7 +1545,7 @@ async function pgHostSignal(m){
   const gid=m.from;
   if(m.type==='hello'){
     if(L.peers[gid]){ const old=L.peers[gid]; try{ if(old.dc){old.dc.onclose=null;old.dc.onmessage=null;old.dc.close();} }catch(e){} try{ if(old.pc){old.pc.onconnectionstatechange=null;old.pc.close();} }catch(e){} delete L.peers[gid]; }
-    const pc=new RTCPeerConnection(ICE_CONF), peer={pc,dc:null,pending:[],ready:false};
+    const pc=new RTCPeerConnection(L.ice||ICE_CONF), peer={pc,dc:null,pending:[],ready:false};
     L.peers[gid]=peer;
     pc.onicecandidate=e=>{ if(e.candidate) pgSigSend({to:gid,from:'host',type:'ice',candidate:e.candidate}); };
     pc.onconnectionstatechange=()=>{ const st=pc.connectionState; if(st==='failed'||st==='closed') pgDrop(gid); };
@@ -1599,7 +1688,7 @@ async function joinP2P(code){
 async function pgGuestSignal(m){
   if(m.type==='offer'){
     if(L.pc)return;
-    const pc=new RTCPeerConnection(ICE_CONF); L.pc=pc;
+    const pc=new RTCPeerConnection(L.ice||ICE_CONF); L.pc=pc;
     pc.onicecandidate=e=>{ if(e.candidate) pgSigSend({to:'host',from:L.gid,type:'ice',candidate:e.candidate}); };
     pc.onconnectionstatechange=()=>{ if(pc.connectionState==='failed') pgGuestLost(); };
     pc.ondatachannel=e=>{ L.dc=e.channel; L.dc.onopen=()=>pgGuestReady(); L.dc.onmessage=ev=>{ let o;try{o=JSON.parse(ev.data);}catch(e){return;} pgGuestMsg(o); }; L.dc.onclose=()=>pgGuestLost(); };
@@ -1730,7 +1819,8 @@ function pgGuestLost(){ if(!L||L.role!=='player'||L.bye)return;
   if(L._reconnecting)return; L._reconnecting=true; const code=L.code;
   clearTick();
   app.innerHTML=topbar('leavePlayer()')+`<div class="waitcard"><div class="spinner"></div><div class="rank" style="font-size:22px">Reconnecting…</div><div class="sub" style="color:var(--muted);margin-top:8px">Hang tight — getting you back into the game.</div><div class="conn">room ${esc(code)}</div></div>`;
-  setTimeout(()=>{ if(L&&L.code===code&&!L.bye&&!(L.dc&&L.dc.readyState==='open')) joinP2P(code); },1200);
+  const cf=!!(L&&L.cf);
+  setTimeout(()=>{ if(L&&L.code===code&&!L.bye&&!(L.dc&&L.dc.readyState==='open')) (cf?joinCF:joinP2P)(code); },1200);
 }
 function pgByeScreen(){ clearTick(); app.innerHTML=topbar()+`<div class="waitcard"><div class="big" style="font-size:44px">🏁</div><div class="rank" style="font-size:22px">Game over</div><div class="sub" style="color:var(--muted);margin:8px 0 18px">The host ended the game. Thanks for playing!</div><button class="cta" onclick="home()">Home</button></div>`; }
 async function resumeHostP2P(code){
@@ -1765,6 +1855,7 @@ function loop(){ ctx.clearRect(0,0,cv.width,cv.height);
 /* =================== ROUTER =================== */
 function route(){ const h=location.hash||''; let m;
   if((m=h.match(/p2p=([A-Za-z0-9]{4})/))){ p2pTestJoin(m[1]); return; }
+  if((m=h.match(/cf=([A-Za-z0-9]{4})/))){ const c=m[1]; const snap=loadP2PHost(c); if(snap&&snap.kind==='cf') resumeHostCF(c); else joinCF(c); return; }
   if((m=h.match(/pg=([A-Za-z0-9]{4})/))){ const c=m[1]; if(loadP2PHost(c)) resumeHostP2P(c); else joinP2P(c); return; }
   if((m=h.match(/join=([A-Za-z0-9]{4})/))){ joinLive(m[1]); return; }
   if((m=h.match(/host=([A-Za-z0-9]{4})/))){ resumeHost(m[1]); return; }
