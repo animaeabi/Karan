@@ -11,6 +11,12 @@ This deploys a tiny Cloudflare Worker that powers the **🧪 Cloudflare (beta)**
 Game data (photos, answers, roasts) still flows **peer-to-peer over WebRTC** — the
 Worker only brokers the connection. STUN is `stun.cloudflare.com` (free).
 
+> **Three independent pieces.** Path A has (1) **hosting** = Cloudflare Pages,
+> (2) **signaling** = this Worker's `/ws`, (3) **TURN** = this Worker's `/turn`.
+> They're separate and can be adopted in any order. Hosting needs **no code
+> changes** (see the last section); signaling + TURN need the Worker deployed and
+> `CF_WORKER` set.
+
 ## One-time setup
 
 Prereqs: a Cloudflare account and [`wrangler`](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
@@ -61,3 +67,30 @@ Commit + deploy the site. The 🧪 beta buttons now use Cloudflare end-to-end.
 wrangler dev      # serves on http://localhost:8787
 ```
 Set `CF_WORKER='http://localhost:8787'` temporarily to test against it.
+
+## Hosting the site on Cloudflare Pages (optional, no code changes)
+
+This is the **hosting** half of Path A, and it's completely separate from the
+Worker above. The site is currently on **GitHub Pages**; moving it to Cloudflare
+Pages gets you unlimited free bandwidth. It requires **no edits to `index.html`** —
+the app's QR/join links use `location.origin`, so they adapt to any domain.
+
+### Option 1 — connect the Git repo (recommended)
+1. Cloudflare dashboard → **Workers & Pages → Create → Pages → Connect to Git**.
+2. Pick this repo and branch.
+3. Build settings: **Framework preset: None**, **Build command: (empty)**,
+   **Build output directory: `/`** (root — `index.html` lives at the repo root).
+4. Deploy. You get `https://<project>.pages.dev` (add a custom domain if you want).
+
+Every push to the branch then auto-deploys, same as GitHub Pages does today.
+
+### Option 2 — direct upload from your machine
+```bash
+wrangler pages deploy . --project-name partypedia
+```
+
+### Notes
+- GitHub Pages and Cloudflare Pages can run **side by side** — moving hosting
+  doesn't break anything, and you can switch your DNS/custom domain when ready.
+- Whichever host serves `index.html`, the 🧪 beta still talks to the **Worker**
+  for signaling/TURN — hosting and signaling are independent.
